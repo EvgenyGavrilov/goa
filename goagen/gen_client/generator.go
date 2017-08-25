@@ -11,6 +11,7 @@ import (
 	"text/template"
 
 	"github.com/goadesign/goa/design"
+	"github.com/goadesign/goa/dslengine"
 	"github.com/goadesign/goa/goagen/codegen"
 	"github.com/goadesign/goa/goagen/gen_app"
 	"github.com/goadesign/goa/goagen/utils"
@@ -18,6 +19,17 @@ import (
 
 // Filename used to generate all data types (without the ".go" extension)
 const typesFileName = "datatypes"
+
+//NewGenerator returns an initialized instance of a Go Client Generator
+func NewGenerator(options ...Option) *Generator {
+	g := &Generator{}
+
+	for _, option := range options {
+		option(g)
+	}
+
+	return g
+}
 
 // Generator is the application code generator.
 type Generator struct {
@@ -37,19 +49,21 @@ type Generator struct {
 func Generate() (files []string, err error) {
 	var (
 		outDir, target, toolDir, tool, ver string
-		notool                             bool
+		notool, regen                      bool
 	)
 	dtool := defaultToolName(design.Design)
 
 	set := flag.NewFlagSet("client", flag.PanicOnError)
-	set.String("design", "", "")
-	set.Bool("force", false, "")
 	set.StringVar(&outDir, "out", "", "")
 	set.StringVar(&target, "pkg", "client", "")
 	set.StringVar(&toolDir, "tooldir", "tool", "")
 	set.StringVar(&tool, "tool", dtool, "")
 	set.StringVar(&ver, "version", "", "")
 	set.BoolVar(&notool, "notool", false, "")
+	set.BoolVar(&regen, "regen", false, "")
+	set.String("design", "", "")
+	set.Bool("force", false, "")
+	set.Bool("notest", false, "")
 	set.Parse(os.Args[1:])
 
 	// First check compatibility
@@ -66,6 +80,10 @@ func Generate() (files []string, err error) {
 
 // Generate generats the client package and CLI.
 func (g *Generator) Generate() (_ []string, err error) {
+	if g.API == nil {
+		return nil, fmt.Errorf("missing API definition, make sure design is properly initialized")
+	}
+
 	go utils.Catch(nil, func() { g.Cleanup() })
 
 	defer func() {
@@ -74,15 +92,18 @@ func (g *Generator) Generate() (_ []string, err error) {
 		}
 	}()
 
-	if g.Target == "" {
-		g.Target = "client"
+	firstNonEmpty := func(args ...string) string {
+		for _, value := range args {
+			if len(value) > 0 {
+				return value
+			}
+		}
+		return ""
 	}
-	if g.ToolDirName == "" {
-		g.ToolDirName = "tool"
-	}
-	if g.Tool == "" {
-		g.Tool = defaultToolName(g.API)
-	}
+
+	g.Target = firstNonEmpty(g.Target, "client")
+	g.ToolDirName = firstNonEmpty(g.ToolDirName, "tool")
+	g.Tool = firstNonEmpty(g.Tool, defaultToolName(g.API))
 
 	codegen.Reserved[g.Target] = true
 
@@ -117,7 +138,7 @@ func (g *Generator) Generate() (_ []string, err error) {
 
 	// Setup generation
 	var funcs template.FuncMap
-	var clientPkg, cliPkg string
+	var clientPkg string
 	{
 		funcs = template.FuncMap{
 			"add":                func(a, b int) int { return a + b },
@@ -133,7 +154,6 @@ func (g *Generator) Generate() (_ []string, err error) {
 			"join":               join,
 			"joinStrings":        strings.Join,
 			"multiComment":       multiComment,
-			"pathParamNames":     pathParamNames,
 			"pathParams":         pathParams,
 			"pathTemplate":       pathTemplate,
 			"signerType":         signerType,
@@ -148,14 +168,16 @@ func (g *Generator) Generate() (_ []string, err error) {
 		if err != nil {
 			return
 		}
-		cliPkg, err = codegen.PackagePath(cliDir)
-		if err != nil {
-			return
-		}
 		arrayToStringTmpl = template.Must(template.New("client").Funcs(funcs).Parse(arrayToStringT))
 	}
 
 	if !g.NoTool {
+		var cliPkg string
+		cliPkg, err = codegen.PackagePath(cliDir)
+		if err != nil {
+			return
+		}
+
 		// Generate tool/main.go (only once)
 		mainFile := filepath.Join(toolDir, "main.go")
 		if _, err := os.Stat(mainFile); err != nil {
@@ -187,6 +209,9 @@ func (g *Generator) Generate() (_ []string, err error) {
 }
 
 func defaultToolName(api *design.APIDefinition) string {
+	if api == nil {
+		return ""
+	}
 	return strings.Replace(strings.ToLower(api.Name), " ", "-", -1) + "-cli"
 }
 
@@ -198,11 +223,20 @@ func (g *Generator) Cleanup() {
 	g.genfiles = nil
 }
 
-func (g *Generator) generateClient(clientFile string, clientPkg string, funcs template.FuncMap) error {
-	file, err := codegen.SourceFileFor(clientFile)
-	if err != nil {
-		return err
+func (g *Generator) generateClient(clientFile string, clientPkg string, funcs template.FuncMap) (err error) {
+	var file *codegen.SourceFile
+	{
+		file, err = codegen.SourceFileFor(clientFile)
+		if err != nil {
+			return
+		}
 	}
+	defer func() {
+		file.Close()
+		if err == nil {
+			err = file.FormatCode()
+		}
+	}()
 	clientTmpl := template.Must(template.New("client").Funcs(funcs).Parse(clientTmpl))
 
 	// Compute list of encoders and decoders
@@ -239,7 +273,8 @@ func (g *Generator) generateClient(clientFile string, clientPkg string, funcs te
 	for _, packagePath := range packagePaths {
 		imports = append(imports, codegen.SimpleImport(packagePath))
 	}
-	if err := file.WriteHeader("", g.Target, imports); err != nil {
+	title := fmt.Sprintf("%s: Client", g.API.Context())
+	if err = file.WriteHeader(title, g.Target, imports); err != nil {
 		return err
 	}
 	g.genfiles = append(g.genfiles, clientFile)
@@ -254,11 +289,8 @@ func (g *Generator) generateClient(clientFile string, clientPkg string, funcs te
 		Encoders: encoders,
 		Decoders: decoders,
 	}
-	if err := clientTmpl.Execute(file, data); err != nil {
-		return err
-	}
-
-	return file.FormatCode()
+	err = clientTmpl.Execute(file, data)
+	return
 }
 
 func (g *Generator) generateClientResources(pkgDir, clientPkg string, funcs template.FuncMap) error {
@@ -275,7 +307,7 @@ func (g *Generator) generateClientResources(pkgDir, clientPkg string, funcs temp
 	return g.generateMediaTypes(pkgDir, funcs)
 }
 
-func (g *Generator) generateResourceClient(pkgDir string, res *design.ResourceDefinition, funcs template.FuncMap) error {
+func (g *Generator) generateResourceClient(pkgDir string, res *design.ResourceDefinition, funcs template.FuncMap) (err error) {
 	payloadTmpl := template.Must(template.New("payload").Funcs(funcs).Parse(payloadTmpl))
 	pathTmpl := template.Must(template.New("pathTemplate").Funcs(funcs).Parse(pathTmpl))
 
@@ -285,10 +317,18 @@ func (g *Generator) generateResourceClient(pkgDir string, res *design.ResourceDe
 		resFilename += "_client"
 	}
 	filename := filepath.Join(pkgDir, resFilename+".go")
-	file, err := codegen.SourceFileFor(filename)
+
+	var file *codegen.SourceFile
+	file, err = codegen.SourceFileFor(filename)
 	if err != nil {
 		return err
 	}
+	defer func() {
+		file.Close()
+		if err == nil {
+			err = file.FormatCode()
+		}
+	}()
 	imports := []*codegen.ImportSpec{
 		codegen.SimpleImport("bytes"),
 		codegen.SimpleImport("encoding/json"),
@@ -302,11 +342,12 @@ func (g *Generator) generateResourceClient(pkgDir string, res *design.ResourceDe
 		codegen.SimpleImport("strconv"),
 		codegen.SimpleImport("strings"),
 		codegen.SimpleImport("time"),
-		codegen.SimpleImport("golang.org/x/net/context"),
+		codegen.SimpleImport("context"),
 		codegen.SimpleImport("golang.org/x/net/websocket"),
 		codegen.NewImport("uuid", "github.com/goadesign/goa/uuid"),
 	}
-	if err := file.WriteHeader("", g.Target, imports); err != nil {
+	title := fmt.Sprintf("%s: %s Resource Client", g.API.Context(), res.Name)
+	if err = file.WriteHeader(title, g.Target, imports); err != nil {
 		return err
 	}
 	g.genfiles = append(g.genfiles, filename)
@@ -314,6 +355,9 @@ func (g *Generator) generateResourceClient(pkgDir string, res *design.ResourceDe
 	err = res.IterateFileServers(func(fs *design.FileServerDefinition) error {
 		return g.generateFileServer(file, fs, funcs)
 	})
+	if err != nil {
+		return err
+	}
 
 	err = res.IterateActions(func(action *design.ActionDefinition) error {
 		if action.Payload != nil {
@@ -332,12 +376,29 @@ func (g *Generator) generateResourceClient(pkgDir string, res *design.ResourceDe
 			}
 		}
 		for i, r := range action.Routes {
+			routeParams := r.Params()
+			var pd []*paramData
+
+			for _, p := range routeParams {
+				requiredParams, _ := initParams(&design.AttributeDefinition{
+					Type: &design.Object{
+						p: action.Params.Type.ToObject()[p],
+					},
+					Validation: &dslengine.ValidationDefinition{
+						Required: routeParams,
+					},
+				})
+				pd = append(pd, requiredParams...)
+			}
+
 			data := struct {
-				Route *design.RouteDefinition
-				Index int
+				Route  *design.RouteDefinition
+				Index  int
+				Params []*paramData
 			}{
-				Route: r,
-				Index: i,
+				Route:  r,
+				Index:  i,
+				Params: pd,
 			}
 			if err := pathTmpl.Execute(file, data); err != nil {
 				return err
@@ -345,11 +406,7 @@ func (g *Generator) generateResourceClient(pkgDir string, res *design.ResourceDe
 		}
 		return g.generateActionClient(action, file, funcs)
 	})
-	if err != nil {
-		return err
-	}
-
-	return file.FormatCode()
+	return
 }
 
 func (g *Generator) generateFileServer(file *codegen.SourceFile, fs *design.FileServerDefinition, funcs template.FuncMap) error {
@@ -409,51 +466,15 @@ func (g *Generator) generateActionClient(action *design.ActionDefinition, file *
 		params = append(params, "payload "+codegen.GoTypeRef(action.Payload, action.Payload.AllRequired(), 1, false))
 		names = append(names, "payload")
 	}
-	initParams := func(att *design.AttributeDefinition) []*paramData {
-		if att == nil {
-			return nil
-		}
-		obj := att.Type.ToObject()
-		var pdata []*paramData
-		var optData []*paramData
-		for n, q := range obj {
-			varName := codegen.Goify(n, false)
-			param := &paramData{
-				Name:      n,
-				VarName:   varName,
-				Attribute: q,
-			}
-			if q.Type.IsPrimitive() {
-				param.MustToString = q.Type.Kind() != design.StringKind
-				if att.IsRequired(n) {
-					param.ValueName = varName
-					pdata = append(pdata, param)
-				} else {
-					param.ValueName = "*" + varName
-					param.CheckNil = true
-					optData = append(optData, param)
-				}
-			} else {
-				if q.Type.IsArray() {
-					param.IsArray = true
-					param.ElemAttribute = q.Type.ToArray().ElemType
-				}
-				param.MustToString = true
-				param.ValueName = varName
-				param.CheckNil = true
-				if att.IsRequired(n) {
-					pdata = append(pdata, param)
-				} else {
-					optData = append(optData, param)
-				}
-			}
-		}
 
-		sort.Sort(byParamName(pdata))
+	initParamsScoped := func(att *design.AttributeDefinition) []*paramData {
+		reqData, optData := initParams(att)
+
+		sort.Sort(byParamName(reqData))
 		sort.Sort(byParamName(optData))
 
 		// Update closure
-		for _, p := range pdata {
+		for _, p := range reqData {
 			names = append(names, p.VarName)
 			params = append(params, p.VarName+" "+cmdFieldType(p.Attribute.Type, false))
 		}
@@ -461,38 +482,42 @@ func (g *Generator) generateActionClient(action *design.ActionDefinition, file *
 			names = append(names, p.VarName)
 			params = append(params, p.VarName+" "+cmdFieldType(p.Attribute.Type, p.Attribute.Type.IsPrimitive()))
 		}
-
-		return append(pdata, optData...)
+		return append(reqData, optData...)
 	}
-	queryParams = initParams(action.QueryParams)
-	headers = initParams(action.Headers)
+	queryParams = initParamsScoped(action.QueryParams)
+	headers = initParamsScoped(action.Headers)
+
 	if action.Security != nil {
 		signer = codegen.Goify(action.Security.Scheme.SchemeName, true)
 	}
 	data := struct {
-		Name            string
-		ResourceName    string
-		Description     string
-		Routes          []*design.RouteDefinition
-		HasPayload      bool
-		Params          string
-		ParamNames      string
-		CanonicalScheme string
-		Signer          string
-		QueryParams     []*paramData
-		Headers         []*paramData
+		Name               string
+		ResourceName       string
+		Description        string
+		Routes             []*design.RouteDefinition
+		HasPayload         bool
+		HasMultiContent    bool
+		DefaultContentType string
+		Params             string
+		ParamNames         string
+		CanonicalScheme    string
+		Signer             string
+		QueryParams        []*paramData
+		Headers            []*paramData
 	}{
-		Name:            action.Name,
-		ResourceName:    action.Parent.Name,
-		Description:     action.Description,
-		Routes:          action.Routes,
-		HasPayload:      action.Payload != nil,
-		Params:          strings.Join(params, ", "),
-		ParamNames:      strings.Join(names, ", "),
-		CanonicalScheme: action.CanonicalScheme(),
-		Signer:          signer,
-		QueryParams:     queryParams,
-		Headers:         headers,
+		Name:               action.Name,
+		ResourceName:       action.Parent.Name,
+		Description:        action.Description,
+		Routes:             action.Routes,
+		HasPayload:         action.Payload != nil,
+		HasMultiContent:    len(design.Design.Consumes) > 1,
+		DefaultContentType: design.Design.Consumes[0].MIMETypes[0],
+		Params:             strings.Join(params, ", "),
+		ParamNames:         strings.Join(names, ", "),
+		CanonicalScheme:    action.CanonicalScheme(),
+		Signer:             signer,
+		QueryParams:        queryParams,
+		Headers:            headers,
 	}
 	if action.WebSocket() {
 		return clientsWSTmpl.Execute(file, data)
@@ -535,15 +560,27 @@ func (g *Generator) fileServerMethod(fs *design.FileServerDefinition) string {
 
 // generateMediaTypes iterates through the media types and generate the data structures and
 // marshaling code.
-func (g *Generator) generateMediaTypes(pkgDir string, funcs template.FuncMap) error {
+func (g *Generator) generateMediaTypes(pkgDir string, funcs template.FuncMap) (err error) {
 	funcs["decodegotyperef"] = decodeGoTypeRef
 	funcs["decodegotypename"] = decodeGoTypeName
 	typeDecodeTmpl := template.Must(template.New("typeDecode").Funcs(funcs).Parse(typeDecodeTmpl))
-	mtFile := filepath.Join(pkgDir, "media_types.go")
-	mtWr, err := genapp.NewMediaTypesWriter(mtFile)
-	if err != nil {
-		panic(err) // bug
+	var (
+		mtFile string
+		mtWr   *genapp.MediaTypesWriter
+	)
+	{
+		mtFile = filepath.Join(pkgDir, "media_types.go")
+		mtWr, err = genapp.NewMediaTypesWriter(mtFile)
+		if err != nil {
+			return
+		}
 	}
+	defer func() {
+		mtWr.Close()
+		if err == nil {
+			err = mtWr.FormatCode()
+		}
+	}()
 	title := fmt.Sprintf("%s: Application Media Types", g.API.Context())
 	imports := []*codegen.ImportSpec{
 		codegen.SimpleImport("github.com/goadesign/goa"),
@@ -553,7 +590,13 @@ func (g *Generator) generateMediaTypes(pkgDir string, funcs template.FuncMap) er
 		codegen.SimpleImport("unicode/utf8"),
 		codegen.NewImport("uuid", "github.com/goadesign/goa/uuid"),
 	}
-	mtWr.WriteHeader(title, g.Target, imports)
+	for _, v := range g.API.MediaTypes {
+		imports = codegen.AttributeImports(v.AttributeDefinition, imports, nil)
+	}
+	if err = mtWr.WriteHeader(title, g.Target, imports); err != nil {
+		return err
+	}
+	g.genfiles = append(g.genfiles, mtFile)
 	err = g.API.IterateMediaTypes(func(mt *design.MediaTypeDefinition) error {
 		if (mt.Type.IsObject() || mt.Type.IsArray()) && !mt.IsError() {
 			if err := mtWr.Execute(mt); err != nil {
@@ -572,37 +615,48 @@ func (g *Generator) generateMediaTypes(pkgDir string, funcs template.FuncMap) er
 		})
 		return err
 	})
-	g.genfiles = append(g.genfiles, mtFile)
-	if err != nil {
-		return err
-	}
-	return mtWr.FormatCode()
+	return
 }
 
 // generateUserTypes iterates through the user types and generates the data structures and
 // marshaling code.
-func (g *Generator) generateUserTypes(pkgDir string) error {
-	utFile := filepath.Join(pkgDir, "user_types.go")
-	utWr, err := genapp.NewUserTypesWriter(utFile)
-	if err != nil {
-		panic(err) // bug
+func (g *Generator) generateUserTypes(pkgDir string) (err error) {
+	var (
+		utFile string
+		utWr   *genapp.UserTypesWriter
+	)
+	{
+		utFile = filepath.Join(pkgDir, "user_types.go")
+		utWr, err = genapp.NewUserTypesWriter(utFile)
+		if err != nil {
+			return
+		}
 	}
+	defer func() {
+		utWr.Close()
+		if err == nil {
+			err = utWr.FormatCode()
+		}
+	}()
 	title := fmt.Sprintf("%s: Application User Types", g.API.Context())
 	imports := []*codegen.ImportSpec{
 		codegen.SimpleImport("github.com/goadesign/goa"),
 		codegen.SimpleImport("fmt"),
 		codegen.SimpleImport("time"),
 		codegen.SimpleImport("unicode/utf8"),
+		codegen.NewImport("uuid", "github.com/goadesign/goa/uuid"),
 	}
-	utWr.WriteHeader(title, g.Target, imports)
+	for _, v := range g.API.Types {
+		imports = codegen.AttributeImports(v.AttributeDefinition, imports, nil)
+	}
+	if err = utWr.WriteHeader(title, g.Target, imports); err != nil {
+		return err
+	}
+	g.genfiles = append(g.genfiles, utFile)
 	err = g.API.IterateUserTypes(func(t *design.UserTypeDefinition) error {
 		return utWr.Execute(t)
 	})
-	g.genfiles = append(g.genfiles, utFile)
-	if err != nil {
-		return err
-	}
-	return utWr.FormatCode()
+	return
 }
 
 // join is a code generation helper function that generates a function signature built from
@@ -633,7 +687,8 @@ func join(att *design.AttributeDefinition, usePointers bool, pos ...[]string) st
 	}
 	for i, n := range keys {
 		a := obj[n]
-		elems[i] = fmt.Sprintf("%s %s", codegen.Goify(n, false), cmdFieldType(a.Type, usePointers && !a.IsRequired(n)))
+		elems[i] = fmt.Sprintf("%s %s", codegen.Goify(n, false),
+			cmdFieldType(a.Type, usePointers && !a.IsRequired(n)))
 	}
 	return strings.Join(elems, ", ")
 }
@@ -736,7 +791,9 @@ func toString(name, target string, att *design.AttributeDefinition) string {
 			return fmt.Sprintf("%s := strconv.FormatFloat(%s, 'f', -1, 64)", target, name)
 		case design.StringKind:
 			return fmt.Sprintf("%s := %s", target, name)
-		case design.DateTimeKind, design.UUIDKind:
+		case design.DateTimeKind:
+			return fmt.Sprintf("%s := %s.Format(time.RFC3339)", target, strings.Replace(name, "*", "", -1)) // remove pointer if present
+		case design.UUIDKind:
 			return fmt.Sprintf("%s := %s.String()", target, strings.Replace(name, "*", "", -1)) // remove pointer if present
 		case design.AnyKind:
 			return fmt.Sprintf("%s := fmt.Sprintf(\"%%v\", %s)", target, name)
@@ -782,9 +839,9 @@ func signerType(scheme *design.SecuritySchemeDefinition) string {
 	return ""
 }
 
-// pathTemplate returns a fmt format suitable to build a request path to the reoute.
+// pathTemplate returns a fmt format suitable to build a request path to the route.
 func pathTemplate(r *design.RouteDefinition) string {
-	return design.WildcardRegex.ReplaceAllLiteralString(r.FullPath(), "/%v")
+	return design.WildcardRegex.ReplaceAllLiteralString(r.FullPath(), "/%s")
 }
 
 // pathParams return the function signature of the path factory function for the given route.
@@ -797,21 +854,56 @@ func pathParams(r *design.RouteDefinition) string {
 	return join(&design.AttributeDefinition{Type: params}, false, pnames)
 }
 
-// pathParamNames return the names of the parameters of the path factory function for the given route.
-func pathParamNames(r *design.RouteDefinition) string {
-	params := r.Params()
-	goified := make([]string, len(params))
-	for i, p := range params {
-		goified[i] = codegen.Goify(p, false)
-	}
-	return strings.Join(goified, ", ")
-}
-
+// typeName returns Go type name of given MediaType definition.
 func typeName(mt *design.MediaTypeDefinition) string {
 	if mt.IsError() {
 		return "ErrorResponse"
 	}
 	return codegen.GoTypeName(mt, mt.AllRequired(), 1, false)
+}
+
+// initParams returns required and optional paramData extracted from given attribute definition.
+func initParams(att *design.AttributeDefinition) ([]*paramData, []*paramData) {
+	if att == nil {
+		return nil, nil
+	}
+	obj := att.Type.ToObject()
+	var reqParamData []*paramData
+	var optParamData []*paramData
+	for n, q := range obj {
+		varName := codegen.Goify(n, false)
+		param := &paramData{
+			Name:      n,
+			VarName:   varName,
+			Attribute: q,
+		}
+		if q.Type.IsPrimitive() {
+			param.MustToString = q.Type.Kind() != design.StringKind
+			if att.IsRequired(n) {
+				param.ValueName = varName
+				reqParamData = append(reqParamData, param)
+			} else {
+				param.ValueName = "*" + varName
+				param.CheckNil = true
+				optParamData = append(optParamData, param)
+			}
+		} else {
+			if q.Type.IsArray() {
+				param.IsArray = true
+				param.ElemAttribute = q.Type.ToArray().ElemType
+			}
+			param.MustToString = true
+			param.ValueName = varName
+			param.CheckNil = true
+			if att.IsRequired(n) {
+				reqParamData = append(reqParamData, param)
+			} else {
+				optParamData = append(optParamData, param)
+			}
+		}
+	}
+
+	return reqParamData, optParamData
 }
 
 // paramData is the data structure holding the information needed to generate query params and
@@ -854,17 +946,20 @@ func (c *Client) {{ $funcName }}(resp *http.Response) ({{ decodegotyperef . .All
 `
 
 	pathTmpl = `{{ $funcName := printf "%sPath%s" (goify (printf "%s%s" .Route.Parent.Name (title .Route.Parent.Parent.Name)) true) ((or (and .Index (add .Index 1)) "") | printf "%v") }}{{/*
-*/}}{{ with .Route }}// {{ $funcName }} computes a request path to the {{ .Parent.Name }} action of {{ .Parent.Parent.Name }}.
-func {{ $funcName }}({{ pathParams . }}) string {
-	return fmt.Sprintf({{ printf "%q" (pathTemplate .) }}, {{ pathParamNames . }})
+*/}}// {{ $funcName }} computes a request path to the {{ .Route.Parent.Name }} action of {{ .Route.Parent.Parent.Name }}.
+func {{ $funcName }}({{ pathParams .Route }}) string {
+	{{ range $i, $param := .Params }}{{/*
+*/}}{{ toString $param.VarName (printf "param%d" $i) $param.Attribute }}
+	{{ end }}
+	return fmt.Sprintf({{ printf "%q" (pathTemplate .Route) }}{{ range $i, $param := .Params }}, {{ printf "param%d" $i }}{{ end }})
 }
-{{ end }}`
+`
 
 	clientsTmpl = `{{ $funcName := goify (printf "%s%s" .Name (title .ResourceName)) true }}{{ $desc := .Description }}{{/*
 */}}{{ if $desc }}{{ multiComment $desc }}{{ else }}{{/*
 */}}// {{ $funcName }} makes a request to the {{ .Name }} action endpoint of the {{ .ResourceName }} resource{{ end }}
-func (c *Client) {{ $funcName }}(ctx context.Context, path string{{ if .Params}},  {{ .Params }}{{ end }}{{ if .HasPayload }}, contentType string{{ end }}) (*http.Response, error) {
-	req, err := c.New{{ $funcName }}Request(ctx, path{{ if .ParamNames }}, {{ .ParamNames }}{{ end }}{{ if .HasPayload }}, contentType{{ end }})
+func (c *Client) {{ $funcName }}(ctx context.Context, path string{{ if .Params }}, {{ .Params }}{{ end }}{{ if and .HasPayload .HasMultiContent }}, contentType string{{ end }}) (*http.Response, error) {
+	req, err := c.New{{ $funcName }}Request(ctx, path{{ if .ParamNames }}, {{ .ParamNames }}{{ end }}{{ if and .HasPayload .HasMultiContent }}, contentType{{ end }})
 	if err != nil {
 		return nil, err
 	}
@@ -889,7 +984,7 @@ func (c *Client) {{ $funcName }}(ctx context.Context, path string{{ if .Params }
 {{ if .MustToString }}{{ $tmp := tempvar }}			{{ toString "p" $tmp .ElemAttribute }}
 			values.Add("{{ .Name }}", {{ $tmp }})
 {{ else }}			values.Add("{{ .Name }}", {{ .ValueName }})
-{{ end }}{{/*
+{{ end }}}{{/*
 
 // NON STRING
 */}}{{ else if .MustToString }}{{ $tmp := tempvar }}	{{ toString .ValueName $tmp .Attribute }}
@@ -899,7 +994,14 @@ func (c *Client) {{ $funcName }}(ctx context.Context, path string{{ if .Params }
 */}}{{ else }}	values.Set("{{ .Name }}", {{ .ValueName }})
 {{ end }}{{ if .CheckNil }}	}
 {{ end }}{{ end }}	u.RawQuery = values.Encode()
-{{ end }}	return websocket.Dial(u.String(), "", u.String())
+{{ end }}	url_ := u.String()
+	cfg, err := websocket.NewConfig(url_, url_)
+	if err != nil {
+		return nil, err
+	}
+{{ range $header := .Headers }}{{ $tmp := tempvar }}	{{ toString $header.VarName $tmp $header.Attribute }}
+	cfg.Header["{{ $header.Name }}"] = []string{ {{ $tmp }} }
+{{ end }}	return websocket.DialConfig(cfg)
 }
 `
 
@@ -941,12 +1043,12 @@ func (c * Client) {{ .Name }}(ctx context.Context, {{ if .DirName }}filename, {{
 
 	requestsTmpl = `{{ $funcName := goify (printf "New%s%sRequest" (title .Name) (title .ResourceName)) true }}{{/*
 */}}// {{ $funcName }} create the request corresponding to the {{ .Name }} action endpoint of the {{ .ResourceName }} resource.
-func (c *Client) {{ $funcName }}(ctx context.Context, path string{{ if .Params }}, {{ .Params }}{{ end }}{{ if .HasPayload }}, contentType string{{ end }}) (*http.Request, error) {
+func (c *Client) {{ $funcName }}(ctx context.Context, path string{{ if .Params }}, {{ .Params }}{{ end }}{{ if .HasPayload }}{{ if .HasMultiContent }}, contentType string{{ end }}{{ end }}) (*http.Request, error) {
 {{ if .HasPayload }}	var body bytes.Buffer
-	if contentType == "" {
+{{ if .HasMultiContent }}	if contentType == "" {
 		contentType = "*/*" // Use default encoder
 	}
-	err := c.Encoder.Encode(payload, &body, contentType)
+{{ end }}	err := c.Encoder.Encode(payload, &body, {{ if .HasMultiContent }}contentType{{ else }}"*/*"{{ end }})
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode body: %s", err)
 	}
@@ -983,15 +1085,19 @@ func (c *Client) {{ $funcName }}(ctx context.Context, path string{{ if .Params }
 {{ end }}	if err != nil {
 		return nil, err
 	}
-{{ if or .Headers .HasPayload }}	header := req.Header
-{{ if .HasPayload }}	if contentType != "*/*" {
+{{ if or .HasPayload .Headers }}	header := req.Header
+{{ if .HasPayload }}{{ if .HasMultiContent }}	if contentType == "*/*" {
+		header.Set("Content-Type", "{{ .DefaultContentType }}")
+	} else {
 		header.Set("Content-Type", contentType)
 	}
-{{ end }}{{ range .Headers }}{{ if .CheckNil }}	if {{ .VarName }} != nil { {{ end }}{{ if .MustToString }}{{ $tmp := tempvar }}	{{ toString .ValueName $tmp .Attribute }}
+{{ else }}	header.Set("Content-Type", "{{ .DefaultContentType }}")
+{{ end }}{{ end }}{{ range .Headers }}{{ if .CheckNil }}	if {{ .VarName }} != nil {
+{{ end }}{{ if .MustToString }}{{ $tmp := tempvar }}	{{ toString .ValueName $tmp .Attribute }}
 	header.Set("{{ .Name }}", {{ $tmp }}){{ else }}
 	header.Set("{{ .Name }}", {{ .ValueName }})
-{{ end }}{{ if .CheckNil }}	}
-{{ end }}{{ end }}{{ end }}{{ if .Signer }}	if c.{{ .Signer }}Signer != nil {
+{{ end }}{{ if .CheckNil }}	}{{ end }}
+{{ end }}{{ end }}{{ if .Signer }}	if c.{{ .Signer }}Signer != nil {
 		c.{{ .Signer }}Signer.Sign(req)
 	}
 {{ end }}	return req, nil

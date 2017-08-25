@@ -1,6 +1,7 @@
 package codegen_test
 
 import (
+	"math"
 	"strings"
 
 	"github.com/goadesign/goa/design"
@@ -17,18 +18,19 @@ var _ = Describe("validation code generation", func() {
 
 	Describe("ValidationChecker", func() {
 		Context("given an attribute definition and validations", func() {
+			var att *design.AttributeDefinition
 			var attType design.DataType
 			var validation *dslengine.ValidationDefinition
 
-			att := new(design.AttributeDefinition)
 			target := "val"
 			context := "context"
 			var code string // generated code
 
 			JustBeforeEach(func() {
+				att = new(design.AttributeDefinition)
 				att.Type = attType
 				att.Validation = validation
-				code = codegen.RecursiveChecker(att, false, false, false, target, context, 1, false)
+				code = codegen.NewValidator().Code(att, false, false, false, target, context, 1, false)
 			})
 
 			Context("of enum", func() {
@@ -71,6 +73,34 @@ var _ = Describe("validation code generation", func() {
 				})
 			})
 
+			Context("of max value math.MaxInt64", func() {
+				BeforeEach(func() {
+					attType = design.Integer
+					max := float64(math.MaxInt64)
+					validation = &dslengine.ValidationDefinition{
+						Maximum: &max,
+					}
+				})
+
+				It("produces the validation go code", func() {
+					Ω(code).Should(Equal(maxValCode))
+				})
+			})
+
+			Context("of min value math.MinInt64", func() {
+				BeforeEach(func() {
+					attType = design.Integer
+					min := float64(math.MinInt64)
+					validation = &dslengine.ValidationDefinition{
+						Minimum: &min,
+					}
+				})
+
+				It("produces the validation go code", func() {
+					Ω(code).Should(Equal(minminValCode))
+				})
+			})
+
 			Context("of array min length 1", func() {
 				BeforeEach(func() {
 					attType = &design.Array{
@@ -86,6 +116,90 @@ var _ = Describe("validation code generation", func() {
 
 				It("produces the validation go code", func() {
 					Ω(code).Should(Equal(arrayMinLengthValCode))
+				})
+			})
+
+			Context("of array elements", func() {
+				BeforeEach(func() {
+					attType = &design.Array{
+						ElemType: &design.AttributeDefinition{
+							Type: design.String,
+							Validation: &dslengine.ValidationDefinition{
+								Pattern: ".*",
+							},
+						},
+					}
+					validation = nil
+				})
+
+				It("produces the validation go code", func() {
+					Ω(code).Should(Equal(arrayElementsValCode))
+				})
+			})
+
+			Context("of hash elements (key, elem)", func() {
+				BeforeEach(func() {
+					attType = &design.Hash{
+						KeyType: &design.AttributeDefinition{
+							Type: design.String,
+							Validation: &dslengine.ValidationDefinition{
+								Pattern: ".*",
+							},
+						},
+						ElemType: &design.AttributeDefinition{
+							Type: design.String,
+							Validation: &dslengine.ValidationDefinition{
+								Pattern: ".*",
+							},
+						},
+					}
+					validation = nil
+				})
+
+				It("produces the validation go code", func() {
+					Ω(code).Should(Equal(hashKeyElemValCode))
+				})
+			})
+
+			Context("of hash elements (key, _)", func() {
+				BeforeEach(func() {
+					attType = &design.Hash{
+						KeyType: &design.AttributeDefinition{
+							Type: design.String,
+							Validation: &dslengine.ValidationDefinition{
+								Pattern: ".*",
+							},
+						},
+						ElemType: &design.AttributeDefinition{
+							Type: design.String,
+						},
+					}
+					validation = nil
+				})
+
+				It("produces the validation go code", func() {
+					Ω(code).Should(Equal(hashKeyValCode))
+				})
+			})
+
+			Context("of hash elements (_, elem)", func() {
+				BeforeEach(func() {
+					attType = &design.Hash{
+						KeyType: &design.AttributeDefinition{
+							Type: design.String,
+						},
+						ElemType: &design.AttributeDefinition{
+							Type: design.String,
+							Validation: &dslengine.ValidationDefinition{
+								Pattern: ".*",
+							},
+						},
+					}
+					validation = nil
+				})
+
+				It("produces the validation go code", func() {
+					Ω(code).Should(Equal(hashElemValCode))
 				})
 			})
 
@@ -167,6 +281,74 @@ var _ = Describe("validation code generation", func() {
 
 			})
 
+			Context("of required user type attribute with no validation", func() {
+				var ut *design.UserTypeDefinition
+
+				BeforeEach(func() {
+					ut = &design.UserTypeDefinition{
+						TypeName: "UT",
+						AttributeDefinition: &design.AttributeDefinition{
+							Type: design.Object{
+								"bar": &design.AttributeDefinition{Type: design.String},
+							},
+						},
+					}
+					uatt := &design.AttributeDefinition{Type: design.Dup(ut)}
+					arr := &design.AttributeDefinition{
+						Type: &design.Array{
+							ElemType: &design.AttributeDefinition{Type: ut},
+						},
+					}
+
+					attType = design.Object{"foo": arr, "foo2": uatt}
+					validation = &dslengine.ValidationDefinition{
+						Required: []string{"foo"},
+					}
+				})
+
+				Context("with only direct required attributes", func() {
+					BeforeEach(func() {
+						validation = &dslengine.ValidationDefinition{
+							Required: []string{"foo"},
+						}
+					})
+
+					It("does not call Validate on the user type attribute", func() {
+						Ω(code).Should(Equal(utCode))
+					})
+				})
+
+				Context("with required attributes on inner attribute", func() {
+					BeforeEach(func() {
+						ut.AttributeDefinition.Validation = &dslengine.ValidationDefinition{
+							Required: []string{"bar"},
+						}
+						validation = nil
+					})
+
+					It("calls Validate on the user type attribute", func() {
+						Ω(code).Should(Equal(utRequiredCode))
+					})
+				})
+			})
+
+			Context("with a custom type metadata", func() {
+				JustBeforeEach(func() {
+					att.Metadata = map[string][]string{"struct:field:type": {"foo"}}
+					code = codegen.NewValidator().Code(att, false, false, false, target, context, 1, false)
+				})
+
+				BeforeEach(func() {
+					attType = design.Integer
+					validation = &dslengine.ValidationDefinition{
+						Values: []interface{}{1, 2, 3},
+					}
+				})
+
+				It("does not produce validation code", func() {
+					Ω(code).Should(BeEmpty())
+				})
+			})
 		})
 	})
 })
@@ -190,9 +372,48 @@ const (
 		}
 	}`
 
+	maxValCode = `	if val != nil {
+		if *val > 9223372036854775807 {
+			err = goa.MergeErrors(err, goa.InvalidRangeError(` + "`" + `context` + "`" + `, *val, 9223372036854775807, false))
+		}
+	}`
+
+	minminValCode = `	if val != nil {
+		if *val < -9223372036854775808 {
+			err = goa.MergeErrors(err, goa.InvalidRangeError(` + "`" + `context` + "`" + `, *val, -9223372036854775808, true))
+		}
+	}`
+
 	arrayMinLengthValCode = `	if val != nil {
 		if len(val) < 1 {
 			err = goa.MergeErrors(err, goa.InvalidLengthError(` + "`" + `context` + "`" + `, val, len(val), 1, true))
+		}
+	}`
+
+	arrayElementsValCode = `	for _, e := range val {
+		if ok := goa.ValidatePattern(` + "`" + `.*` + "`" + `, e); !ok {
+			err = goa.MergeErrors(err, goa.InvalidPatternError(` + "`" + `context[*]` + "`" + `, e, ` + "`" + `.*` + "`" + `))
+		}
+	}`
+
+	hashKeyElemValCode = `	for k, e := range val {
+		if ok := goa.ValidatePattern(` + "`" + `.*` + "`" + `, k); !ok {
+			err = goa.MergeErrors(err, goa.InvalidPatternError(` + "`" + `context[*]` + "`" + `, k, ` + "`" + `.*` + "`" + `))
+		}
+		if ok := goa.ValidatePattern(` + "`" + `.*` + "`" + `, e); !ok {
+			err = goa.MergeErrors(err, goa.InvalidPatternError(` + "`" + `context[*]` + "`" + `, e, ` + "`" + `.*` + "`" + `))
+		}
+	}`
+
+	hashKeyValCode = `	for k, _ := range val {
+		if ok := goa.ValidatePattern(` + "`" + `.*` + "`" + `, k); !ok {
+			err = goa.MergeErrors(err, goa.InvalidPatternError(` + "`" + `context[*]` + "`" + `, k, ` + "`" + `.*` + "`" + `))
+		}
+	}`
+
+	hashElemValCode = `	for _, e := range val {
+		if ok := goa.ValidatePattern(` + "`" + `.*` + "`" + `, e); !ok {
+			err = goa.MergeErrors(err, goa.InvalidPatternError(` + "`" + `context[*]` + "`" + `, e, ` + "`" + `.*` + "`" + `))
 		}
 	}`
 
@@ -213,7 +434,6 @@ const (
 	embeddedRequiredValCode = `	if val.Foo == nil {
 		err = goa.MergeErrors(err, goa.MissingAttributeError(` + "`context`" + `, "foo"))
 	}
-
 	if val.Foo != nil {
 		if val.Foo.Bar != nil {
 			if !(*val.Foo.Bar == 1 || *val.Foo.Bar == 2 || *val.Foo.Bar == 3) {
@@ -234,6 +454,18 @@ const (
 		if val.Foo.__tag__ != nil {
 			if !(*val.Foo.__tag__ == 1 || *val.Foo.__tag__ == 2 || *val.Foo.__tag__ == 3) {
 				err = goa.MergeErrors(err, goa.InvalidEnumValueError(` + "`" + `context.foo.bar` + "`" + `, *val.Foo.__tag__, []interface{}{1, 2, 3}))
+			}
+		}
+	}`
+
+	utCode = `	if val.Foo == nil {
+		err = goa.MergeErrors(err, goa.MissingAttributeError(` + "`context`" + `, "foo"))
+	}`
+
+	utRequiredCode = `	for _, e := range val.Foo {
+		if e != nil {
+			if err2 := e.Validate(); err2 != nil {
+				err = goa.MergeErrors(err, err2)
 			}
 		}
 	}`

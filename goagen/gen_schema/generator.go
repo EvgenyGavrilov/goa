@@ -2,6 +2,7 @@ package genschema
 
 import (
 	"flag"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -10,6 +11,17 @@ import (
 	"github.com/goadesign/goa/goagen/codegen"
 	"github.com/goadesign/goa/goagen/utils"
 )
+
+//NewGenerator returns an initialized instance of a JavaScript Client Generator
+func NewGenerator(options ...Option) *Generator {
+	g := &Generator{}
+
+	for _, option := range options {
+		option(g)
+	}
+
+	return g
+}
 
 // Generator is the application code generator.
 type Generator struct {
@@ -38,6 +50,10 @@ func Generate() (files []string, err error) {
 
 // Generate produces the skeleton main.
 func (g *Generator) Generate() (_ []string, err error) {
+	if g.API == nil {
+		return nil, fmt.Errorf("missing API definition, make sure design is properly initialized")
+	}
+
 	go utils.Catch(nil, func() { g.Cleanup() })
 
 	defer func() {

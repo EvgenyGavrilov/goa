@@ -214,6 +214,73 @@ var _ = Describe("New", func() {
 			It("serializes into valid swagger JSON", func() { validateSwagger(swagger) })
 		})
 
+		Context("with required payload", func() {
+			BeforeEach(func() {
+				p := Type("RequiredPayload", func() {
+					Member("m1", String)
+				})
+				Resource("res", func() {
+					Action("act", func() {
+						Routing(
+							PUT("/"),
+						)
+						Payload(p)
+					})
+				})
+			})
+
+			It("serializes into valid swagger JSON", func() {
+				validateSwaggerWithFragments(swagger, [][]byte{
+					[]byte(`"required":true`),
+				})
+			})
+		})
+
+		Context("with a payload of type Any", func() {
+			BeforeEach(func() {
+				Resource("res", func() {
+					Action("act", func() {
+						Routing(
+							PUT("/"),
+						)
+						Payload(Any, func() {
+							Example("example")
+						})
+					})
+				})
+			})
+
+			It("serializes into valid swagger JSON", func() {
+				validateSwaggerWithFragments(swagger, [][]byte{
+					[]byte(`"ActResPayload":{"title":"ActResPayload","example":"example"}`),
+				})
+			})
+
+		})
+
+		Context("with optional payload", func() {
+			BeforeEach(func() {
+				p := Type("OptionalPayload", func() {
+					Member("m1", String)
+				})
+				Resource("res", func() {
+					Action("act", func() {
+						Routing(
+							PUT("/"),
+						)
+						OptionalPayload(p)
+					})
+				})
+			})
+
+			It("serializes into valid swagger JSON", func() {
+				validateSwaggerWithFragments(swagger, [][]byte{
+					[]byte(`"required":false`),
+				})
+			})
+
+		})
+
 		Context("with zero value validations", func() {
 			const (
 				intParam = "intParam"
@@ -447,8 +514,18 @@ var _ = Describe("New", func() {
 							Required("Authorization", "X-Account", "OverrideOptionalHeader")
 						})
 						Payload(UpdatePayload)
+						Response(OK, func() {
+							Media(CollectionOf(BottleMedia), "extended")
+						})
 						Response(NoContent)
 						Response(NotFound)
+					})
+
+					Action("hidden", func() {
+						Description("Does not show up in Swagger spec")
+						Metadata("swagger:generate", "false")
+						Routing(GET("/hidden"))
+						Response(OK)
 					})
 				})
 				base := Design.DSLFunc
@@ -478,7 +555,7 @@ var _ = Describe("New", func() {
 				Ω(ps).Should(HaveLen(14))
 				// check Headers in detail
 				Ω(ps[3]).Should(Equal(&genswagger.Parameter{In: "header", Name: "Authorization", Type: "string", Required: true}))
-				Ω(ps[4]).Should(Equal(&genswagger.Parameter{In: "header", Name: "OptionalArray", Type: "array",
+				Ω(ps[4]).Should(Equal(&genswagger.Parameter{In: "header", Name: "OptionalArray", Type: "array", CollectionFormat: "multi",
 					Items: &genswagger.Items{Type: "string"}, MinItems: &minItems1, MaxItems: &maxItems5}))
 				Ω(ps[5]).Should(Equal(&genswagger.Parameter{In: "header", Name: "OptionalBoolWithDefault", Type: "boolean",
 					Description: "defaults true", Default: true}))
@@ -495,19 +572,26 @@ var _ = Describe("New", func() {
 				b := swagger.Paths["/base/bottles/{id}"].(*genswagger.Path)
 				Ω(b.Put).ShouldNot(BeNil())
 				Ω(b.Put.Parameters).Should(HaveLen(14))
+				Ω(b.Put.Produces).Should(Equal([]string{"application/vnd.goa.example.bottle; type=collection"}))
 			})
 
 			It("should set the inherited tag and the action tag", func() {
 				tags := []string{"res", "Update"}
 				a := swagger.Paths["/orgs/{org}/accounts/{id}"].(*genswagger.Path)
+				Ω(a.Put).ShouldNot(BeNil())
 				Ω(a.Put.Tags).Should(Equal(tags))
 				b := swagger.Paths["/base/bottles/{id}"].(*genswagger.Path)
 				Ω(b.Put.Tags).Should(Equal(tags))
 			})
 
-			It("should set the summary from the summary tag", func() {
+			It("sets the summary from the summary tag", func() {
 				a := swagger.Paths["/orgs/{org}/accounts/{id}"].(*genswagger.Path)
 				Ω(a.Put.Summary).Should(Equal("a summary"))
+			})
+
+			It("generates the media type collection schema", func() {
+				Ω(swagger.Definitions).Should(HaveLen(6))
+				Ω(swagger.Definitions).Should(HaveKey("GoaExampleBottleExtendedCollection"))
 			})
 
 			It("serializes into valid swagger JSON", func() { validateSwagger(swagger) })
@@ -571,7 +655,7 @@ var _ = Describe("New", func() {
 			})
 
 			It("should set the action tags", func() {
-				p := swagger.Paths[""].(*genswagger.Path)
+				p := swagger.Paths["/"].(*genswagger.Path)
 				Ω(p.Put.Tags).Should(HaveLen(2))
 				tags := []string{"res", "Update"}
 				Ω(p.Put.Tags).Should(Equal(tags))
@@ -580,7 +664,7 @@ var _ = Describe("New", func() {
 			It("should set the swagger extensions", func() {
 				Ω(swagger.Info.Extensions).Should(HaveLen(1))
 				Ω(swagger.Info.Extensions["x-api"]).Should(Equal(unmarshaled))
-				p := swagger.Paths[""].(*genswagger.Path)
+				p := swagger.Paths["/"].(*genswagger.Path)
 				Ω(p.Extensions).Should(HaveLen(1))
 				Ω(p.Extensions["x-action"]).Should(Equal(unmarshaled))
 				Ω(p.Put.Extensions).Should(HaveLen(1))

@@ -3,57 +3,65 @@ package codegen
 import (
 	"bytes"
 	"fmt"
-	"strings"
 	"text/template"
 
 	"github.com/goadesign/goa/design"
 )
 
-var (
+// Finalizer is the code generator for the 'Finalize' type methods.
+type Finalizer struct {
 	assignmentT      *template.Template
 	arrayAssignmentT *template.Template
-)
-
-// init instantiates the templates
-func init() {
-	var err error
-	fm := template.FuncMap{
-		"tabs":               Tabs,
-		"goify":              Goify,
-		"gotyperef":          GoTypeRef,
-		"add":                Add,
-		"recursiveFinalizer": RecursiveFinalizer,
-	}
-	if assignmentT, err = template.New("assignment").Funcs(fm).Parse(assignmentTmpl); err != nil {
-		panic(err)
-	}
-	if arrayAssignmentT, err = template.New("arrAssignment").Funcs(fm).Parse(arrayAssignmentTmpl); err != nil {
-		panic(err)
-	}
+	seen             map[*design.AttributeDefinition]map[*design.AttributeDefinition]*bytes.Buffer
 }
 
-// RecursiveFinalizer produces Go code that sets the default values for fields recursively for the
-// given attribute.
-func RecursiveFinalizer(att *design.AttributeDefinition, target string, depth int, vs ...map[string]bool) string {
-	var assignments []string
-	if o := att.Type.ToObject(); o != nil {
-		if mt, ok := att.Type.(*design.MediaTypeDefinition); ok {
-			if len(vs) == 0 {
-				vs = []map[string]bool{make(map[string]bool)}
-			} else if _, ok := vs[0][mt.TypeName]; ok {
-				return ""
-			}
-			vs[0][mt.TypeName] = true
-			att = mt.AttributeDefinition
-		} else if ut, ok := att.Type.(*design.UserTypeDefinition); ok {
-			if len(vs) == 0 {
-				vs = []map[string]bool{make(map[string]bool)}
-			} else if _, ok := vs[0][ut.TypeName]; ok {
-				return ""
-			}
-			vs[0][ut.TypeName] = true
-			att = ut.AttributeDefinition
+// NewFinalizer instantiates a finalize code generator.
+func NewFinalizer() *Finalizer {
+	var (
+		f   = &Finalizer{seen: make(map[*design.AttributeDefinition]map[*design.AttributeDefinition]*bytes.Buffer)}
+		err error
+	)
+	fm := template.FuncMap{
+		"tabs":         Tabs,
+		"goify":        Goify,
+		"gotyperef":    GoTypeRef,
+		"add":          Add,
+		"finalizeCode": f.Code,
+	}
+	f.assignmentT, err = template.New("assignment").Funcs(fm).Parse(assignmentTmpl)
+	if err != nil {
+		panic(err)
+	}
+	f.arrayAssignmentT, err = template.New("arrAssignment").Funcs(fm).Parse(arrayAssignmentTmpl)
+	if err != nil {
+		panic(err)
+	}
+	return f
+}
+
+// Code produces Go code that sets the default values for fields recursively for the given
+// attribute.
+func (f *Finalizer) Code(att *design.AttributeDefinition, target string, depth int) string {
+	buf := f.recurse(att, att, target, depth)
+	return buf.String()
+}
+
+func (f *Finalizer) recurse(root, att *design.AttributeDefinition, target string, depth int) *bytes.Buffer {
+	var (
+		buf   = new(bytes.Buffer)
+		first = true
+	)
+
+	if s, ok := f.seen[root]; ok {
+		if buf, ok := s[att]; ok {
+			return buf
 		}
+		s[att] = buf
+	} else {
+		f.seen[root] = map[*design.AttributeDefinition]*bytes.Buffer{att: buf}
+	}
+
+	if o := att.Type.ToObject(); o != nil {
 		o.IterateAttributes(func(n string, catt *design.AttributeDefinition) error {
 			if att.HasDefaultValue(n) {
 				data := map[string]interface{}{
@@ -62,22 +70,27 @@ func RecursiveFinalizer(att *design.AttributeDefinition, target string, depth in
 					"catt":       catt,
 					"depth":      depth,
 					"isDatetime": catt.Type == design.DateTime,
-					"defaultVal": printVal(catt.Type, catt.DefaultValue),
+					"defaultVal": PrintVal(catt.Type, catt.DefaultValue),
 				}
-				assignments = append(assignments, RunTemplate(assignmentT, data))
+				if !first {
+					buf.WriteByte('\n')
+				} else {
+					first = false
+				}
+				buf.WriteString(RunTemplate(f.assignmentT, data))
 			}
-			assignment := RecursiveFinalizer(
-				catt,
-				fmt.Sprintf("%s.%s", target, Goify(n, true)),
-				depth+1,
-				vs...,
-			)
-			if assignment != "" {
+			a := f.recurse(root, catt, fmt.Sprintf("%s.%s", target, Goify(n, true)), depth+1).String()
+			if a != "" {
 				if catt.Type.IsObject() {
-					assignment = fmt.Sprintf("%sif %s.%s != nil {\n%s\n%s}",
-						Tabs(depth), target, Goify(n, true), assignment, Tabs(depth))
+					a = fmt.Sprintf("%sif %s.%s != nil {\n%s\n%s}",
+						Tabs(depth), target, Goify(n, true), a, Tabs(depth))
 				}
-				assignments = append(assignments, assignment)
+				if !first {
+					buf.WriteByte('\n')
+				} else {
+					first = false
+				}
+				buf.WriteString(a)
 			}
 			return nil
 		})
@@ -87,22 +100,28 @@ func RecursiveFinalizer(att *design.AttributeDefinition, target string, depth in
 			"target":   target,
 			"depth":    1,
 		}
-		assignment := RunTemplate(arrayAssignmentT, data)
-		if assignment != "" {
-			assignments = append(assignments, assignment)
+		if as := RunTemplate(f.arrayAssignmentT, data); as != "" {
+			buf.WriteString(as)
 		}
 	}
-	return strings.Join(assignments, "\n")
+	return buf
 }
 
-// printVal prints the given value corresponding to the given data type.
+// PrintVal prints the given value corresponding to the given data type.
 // The value is already checked for the compatibility with the data type.
-func printVal(t design.DataType, val interface{}) string {
+func PrintVal(t design.DataType, val interface{}) string {
 	switch {
 	case t.IsPrimitive():
 		// For primitive types, simply print the value
 		s := fmt.Sprintf("%#v", val)
-		if t == design.DateTime {
+		switch t {
+		case design.Number:
+			v := val
+			if i, ok := val.(int); ok {
+				v = float64(i)
+			}
+			s = fmt.Sprintf("%f", v)
+		case design.DateTime:
 			s = fmt.Sprintf("time.Parse(time.RFC3339, %s)", s)
 		}
 		return s
@@ -116,7 +135,7 @@ func printVal(t design.DataType, val interface{}) string {
 		var buffer bytes.Buffer
 		buffer.WriteString(fmt.Sprintf("%s{", GoTypeName(t, nil, 0, false)))
 		for k, v := range hval {
-			buffer.WriteString(fmt.Sprintf("%s: %s, ", printVal(h.KeyType.Type, k), printVal(h.ElemType.Type, v)))
+			buffer.WriteString(fmt.Sprintf("%s: %s, ", PrintVal(h.KeyType.Type, k), PrintVal(h.ElemType.Type, v)))
 		}
 		buffer.Truncate(buffer.Len() - 2) // remove ", "
 		buffer.WriteString("}")
@@ -131,7 +150,7 @@ func printVal(t design.DataType, val interface{}) string {
 		var buffer bytes.Buffer
 		buffer.WriteString(fmt.Sprintf("%s{", GoTypeName(t, nil, 0, false)))
 		for _, e := range aval {
-			buffer.WriteString(fmt.Sprintf("%s, ", printVal(a.ElemType.Type, e)))
+			buffer.WriteString(fmt.Sprintf("%s, ", PrintVal(a.ElemType.Type, e)))
 		}
 		buffer.Truncate(buffer.Len() - 2) // remove ", "
 		buffer.WriteString("}")
@@ -151,8 +170,8 @@ const (
 {{ tabs .depth }}	{{ .target }}.{{ goify .field true }} = {{ .defaultVal }}
 }{{ end }}`
 
-	arrayAssignmentTmpl = `{{ $assignment := recursiveFinalizer .elemType "e" (add .depth 1) }}{{/*
-*/}}{{ if $assignment }}{{ tabs .depth }}for _, e := range {{ .target }} {
-{{ $assignment }}
+	arrayAssignmentTmpl = `{{ $a := finalizeCode .elemType "e" (add .depth 1) }}{{/*
+*/}}{{ if $a }}{{ tabs .depth }}for _, e := range {{ .target }} {
+{{ $a }}
 {{ tabs .depth }}}{{ end }}`
 )

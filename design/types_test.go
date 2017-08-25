@@ -12,6 +12,68 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+var _ = Describe("IsObject", func() {
+	var dt DataType
+	var isObject bool
+
+	JustBeforeEach(func() {
+		isObject = dt.IsObject()
+	})
+
+	Context("with a primitive", func() {
+		BeforeEach(func() {
+			dt = String
+		})
+
+		It("returns false", func() {
+			Ω(isObject).Should(BeFalse())
+		})
+	})
+
+	Context("with an array", func() {
+		BeforeEach(func() {
+			dt = &Array{ElemType: &AttributeDefinition{Type: String}}
+		})
+
+		It("returns false", func() {
+			Ω(isObject).Should(BeFalse())
+		})
+	})
+
+	Context("with a hash", func() {
+		BeforeEach(func() {
+			dt = &Hash{
+				KeyType:  &AttributeDefinition{Type: String},
+				ElemType: &AttributeDefinition{Type: String},
+			}
+		})
+
+		It("returns false", func() {
+			Ω(isObject).Should(BeFalse())
+		})
+	})
+
+	Context("with a nil user type type", func() {
+		BeforeEach(func() {
+			dt = &UserTypeDefinition{AttributeDefinition: &AttributeDefinition{Type: nil}}
+		})
+
+		It("returns false", func() {
+			Ω(isObject).Should(BeFalse())
+		})
+	})
+
+	Context("with an object", func() {
+		BeforeEach(func() {
+			dt = Object{}
+		})
+
+		It("returns true", func() {
+			Ω(isObject).Should(BeTrue())
+		})
+	})
+})
+
 var _ = Describe("Project", func() {
 	var mt *MediaTypeDefinition
 	var view string
@@ -127,6 +189,20 @@ var _ = Describe("Project", func() {
 				Ω(att).ShouldNot(BeNil())
 				Ω(att.Type).ShouldNot(BeNil())
 				Ω(att.Type.Kind()).Should(Equal(StringKind))
+			})
+
+			Context("on a collection", func() {
+				BeforeEach(func() {
+					mt = CollectionOf(Dup(mt))
+					dslengine.Execute(mt.DSL(), mt)
+					mt.GenerateExample(NewRandomGenerator(""), nil)
+				})
+
+				It("resets the example", func() {
+					Ω(prErr).ShouldNot(HaveOccurred())
+					Ω(projected).ShouldNot(BeNil())
+					Ω(projected.Example).Should(BeNil())
+				})
 			})
 		})
 
@@ -501,5 +577,29 @@ var _ = Describe("Finalize", func() {
 			defer mu.Unlock()
 			return err
 		}).ShouldNot(HaveOccurred())
+	})
+})
+
+var _ = Describe("GenerateExample", func() {
+
+	Context("Given a UUID", func() {
+		It("generates a string example", func() {
+			rand := NewRandomGenerator("foo")
+			Ω(UUID.GenerateExample(rand, nil)).Should(BeAssignableToTypeOf("foo"))
+		})
+	})
+
+	Context("Given a Hash keyed by UUIDs", func() {
+		var h *Hash
+		BeforeEach(func() {
+			h = &Hash{
+				KeyType:  &AttributeDefinition{Type: UUID},
+				ElemType: &AttributeDefinition{Type: String},
+			}
+		})
+		It("generates a serializable example", func() {
+			rand := NewRandomGenerator("foo")
+			Ω(h.GenerateExample(rand, nil)).Should(BeAssignableToTypeOf(map[string]string{"foo": "bar"}))
+		})
 	})
 })

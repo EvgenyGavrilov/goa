@@ -95,6 +95,16 @@ type (
 		Token() string
 	}
 
+	// ServiceMergeableError is the interface implemented by ServiceErrors that can merge
+	// another error into a combined error.
+	ServiceMergeableError interface {
+		// ServiceMergeableError extends from the ServiceError interface.
+		ServiceError
+
+		// Merge updates an error by combining another error into it.
+		Merge(other error) error
+	}
+
 	// ErrorResponse contains the details of a error response. It implements ServiceError.
 	// This struct is mainly intended for clients to decode error responses.
 	ErrorResponse struct {
@@ -107,7 +117,7 @@ type (
 		// Detail describes the specific error occurrence.
 		Detail string `json:"detail" xml:"detail" form:"detail"`
 		// Meta contains additional key/value pairs useful to clients.
-		Meta []map[string]interface{} `json:"meta,omitempty" xml:"meta,omitempty" form:"meta,omitempty"`
+		Meta map[string]interface{} `json:"meta,omitempty" xml:"meta,omitempty" form:"meta,omitempty"`
 	}
 )
 
@@ -126,14 +136,18 @@ func NewErrorClass(code string, status int) ErrorClass {
 		default:
 			msg = fmt.Sprintf("%v", actual)
 		}
-		meta := make([]map[string]interface{}, (len(keyvals)+1)/2)
-		for i := 0; i < len(keyvals); i += 2 {
+		var meta map[string]interface{}
+		l := len(keyvals)
+		if l > 0 {
+			meta = make(map[string]interface{})
+		}
+		for i := 0; i < l; i += 2 {
 			k := keyvals[i]
 			var v interface{} = "MISSING"
-			if i+1 < len(keyvals) {
+			if i+1 < l {
 				v = keyvals[i+1]
 			}
-			meta[i/2] = map[string]interface{}{fmt.Sprintf("%v", k): v}
+			meta[fmt.Sprintf("%v", k)] = v
 		}
 		return &ErrorResponse{ID: newErrorID(), Code: code, Status: status, Detail: msg, Meta: meta}
 	}
@@ -205,22 +219,22 @@ func InvalidPatternError(ctx, target string, pattern string) error {
 // InvalidRangeError is the error produced when the value of a parameter or payload field does
 // not match the range validation defined in the design. value may be a int or a float64.
 func InvalidRangeError(ctx string, target interface{}, value interface{}, min bool) error {
-	comp := "greater or equal"
+	comp := "greater than or equal to"
 	if !min {
-		comp = "lesser or equal"
+		comp = "less than or equal to"
 	}
-	msg := fmt.Sprintf("%s must be %s than %d but got value %#v", ctx, comp, value, target)
+	msg := fmt.Sprintf("%s must be %s %v but got value %#v", ctx, comp, value, target)
 	return ErrInvalidRequest(msg, "attribute", ctx, "value", target, "comp", comp, "expected", value)
 }
 
 // InvalidLengthError is the error produced when the value of a parameter or payload field does
 // not match the length validation defined in the design.
 func InvalidLengthError(ctx string, target interface{}, ln, value int, min bool) error {
-	comp := "greater or equal"
+	comp := "greater than or equal to"
 	if !min {
-		comp = "lesser or equal"
+		comp = "less than or equal to"
 	}
-	msg := fmt.Sprintf("length of %s must be %s than %d but got value %#v (len=%d)", ctx, comp, value, target, ln)
+	msg := fmt.Sprintf("length of %s must be %s %d but got value %#v (len=%d)", ctx, comp, value, target, ln)
 	return ErrInvalidRequest(msg, "attribute", ctx, "value", target, "len", ln, "comp", comp, "expected", value)
 }
 
@@ -234,10 +248,8 @@ func NoAuthMiddleware(schemeName string) error {
 // Error returns the error occurrence details.
 func (e *ErrorResponse) Error() string {
 	msg := fmt.Sprintf("[%s] %d %s: %s", e.ID, e.Status, e.Code, e.Detail)
-	for _, val := range e.Meta {
-		for k, v := range val {
-			msg += ", " + fmt.Sprintf("%s: %v", k, v)
-		}
+	for k, v := range e.Meta {
+		msg += ", " + fmt.Sprintf("%s: %v", k, v)
 	}
 	return msg
 }
@@ -251,6 +263,8 @@ func (e *ErrorResponse) Token() string { return e.ID }
 // MergeErrors updates an error by merging another into it. It first converts other into a
 // ServiceError if not already one - producing an internal error in that case. The merge algorithm
 // is:
+//
+// * If any of e or other implements ServiceMergableError, it is handled by it's Merge method.
 //
 // * If any of e or other is an internal error then the result is an internal error
 //
@@ -267,11 +281,20 @@ func MergeErrors(err, other error) error {
 		if other == nil {
 			return nil
 		}
-		return asErrorResponse(other)
+		return asServiceError(other)
 	}
 	if other == nil {
-		return asErrorResponse(err)
+		return asServiceError(err)
 	}
+
+	// If either error is a mergable error.
+	if me, ok := err.(ServiceMergeableError); ok {
+		return me.Merge(other)
+	}
+	if mo, ok := other.(ServiceMergeableError); ok {
+		return mo.Merge(err)
+	}
+
 	e := asErrorResponse(err)
 	o := asErrorResponse(other)
 	switch {
@@ -286,10 +309,19 @@ func MergeErrors(err, other error) error {
 	}
 	e.Detail = e.Detail + "; " + o.Detail
 
-	for _, val := range o.Meta {
-		for k, v := range val {
-			e.Meta = append(e.Meta, map[string]interface{}{k: v})
-		}
+	if e.Meta == nil && len(o.Meta) > 0 {
+		e.Meta = make(map[string]interface{})
+	}
+	for k, v := range o.Meta {
+		e.Meta[k] = v
+	}
+	return e
+}
+
+func asServiceError(err error) ServiceError {
+	e, ok := err.(ServiceError)
+	if !ok {
+		return asErrorResponse(err)
 	}
 	return e
 }

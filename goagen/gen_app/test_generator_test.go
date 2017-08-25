@@ -4,6 +4,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/goadesign/goa/design"
 	"github.com/goadesign/goa/dslengine"
@@ -93,6 +94,13 @@ var _ = Describe("Generate", func() {
 				Resources: map[string]*design.ResourceDefinition{
 					"foo": {
 						Name: "foo",
+						Headers: &design.AttributeDefinition{
+							Type: design.Object{
+								"optionalResourceHeader": &design.AttributeDefinition{Type: design.Integer},
+								"requiredResourceHeader": &design.AttributeDefinition{Type: design.String},
+							},
+							Validation: &dslengine.ValidationDefinition{Required: []string{"requiredResourceHeader"}},
+						},
 						Actions: map[string]*design.ActionDefinition{
 							"show": {
 								Name: "show",
@@ -103,13 +111,22 @@ var _ = Describe("Generate", func() {
 										"uuid":     &design.AttributeDefinition{Type: design.UUID},
 										"optional": &design.AttributeDefinition{Type: design.Integer},
 										"required": &design.AttributeDefinition{Type: design.DateTime},
+										"query":    &design.AttributeDefinition{Type: design.String},
 									},
 									Validation: &dslengine.ValidationDefinition{Required: []string{"required"}},
+								},
+								Headers: &design.AttributeDefinition{
+									Type: design.Object{
+										"optionalHeader": &design.AttributeDefinition{Type: design.Integer},
+										"requiredHeader": &design.AttributeDefinition{Type: design.String},
+									},
+									Validation: &dslengine.ValidationDefinition{Required: []string{"requiredHeader", "requiredResourceHeader"}},
 								},
 								QueryParams: &design.AttributeDefinition{
 									Type: design.Object{
 										"optional": &design.AttributeDefinition{Type: design.Integer},
 										"required": &design.AttributeDefinition{Type: design.DateTime},
+										"query":    &design.AttributeDefinition{Type: design.String},
 									},
 									Validation: &dslengine.ValidationDefinition{Required: []string{"required"}},
 								},
@@ -185,7 +202,7 @@ var _ = Describe("Generate", func() {
 			// Multiple Routes
 			Ω(content).Should(ContainSubstring("ShowFooOK1("))
 			// Get returns an error media type
-			Ω(content).Should(ContainSubstring("GetFooOK(t goatest.TInterface, ctx context.Context, service *goa.Service, ctrl app.FooController, payload app.CustomName) (http.ResponseWriter, error)"))
+			Ω(content).Should(ContainSubstring("GetFooOK(t goatest.TInterface, ctx context.Context, service *goa.Service, ctrl app.FooController, optionalResourceHeader *int, requiredResourceHeader string, payload app.CustomName) (http.ResponseWriter, error)"))
 		})
 
 		It("generates the route path parameters", func() {
@@ -204,6 +221,19 @@ var _ = Describe("Generate", func() {
 
 			Ω(content).Should(ContainSubstring(`if optional != nil`))
 			Ω(content).ShouldNot(ContainSubstring(`if required != nil`))
+			Ω(content).Should(ContainSubstring(`if query != nil`))
+		})
+
+		It("properly handles headers", func() {
+			content, err := ioutil.ReadFile(filepath.Join(outDir, "app", "test", "foo_testing.go"))
+			Ω(err).ShouldNot(HaveOccurred())
+
+			Ω(content).Should(ContainSubstring(`if optionalHeader != nil`))
+			Ω(content).ShouldNot(ContainSubstring(`if requiredHeader != nil`))
+			Ω(content).Should(ContainSubstring(`req.Header["Requiredheader"] = sliceVal`))
+			Ω(content).Should(ContainSubstring(`if optionalResourceHeader != nil`))
+			Ω(content).ShouldNot(ContainSubstring(`if requiredResourceHeader != nil`))
+			Ω(content).Should(ContainSubstring(`req.Header["Requiredresourceheader"] = sliceVal`))
 		})
 
 		It("generates calls to new Context ", func() {
@@ -226,12 +256,11 @@ var _ = Describe("Generate", func() {
 
 			Ω(content).Should(ContainSubstring(", payload app.CustomName)"))
 		})
-		It("generates header with DO NOT MODIFY", func() {
+
+		It("generates header compliant with https://github.com/golang/go/issues/13560", func() {
 			content, err := ioutil.ReadFile(filepath.Join(outDir, "app", "test", "foo_testing.go"))
 			Ω(err).ShouldNot(HaveOccurred())
-
-			Ω(content).Should(ContainSubstring("DO NOT MODIFY"))
+			Ω(strings.Split(string(content), "\n")).Should(ContainElement(MatchRegexp(`^// Code generated .* DO NOT EDIT\.$`)))
 		})
-
 	})
 })

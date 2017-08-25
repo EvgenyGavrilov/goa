@@ -429,12 +429,18 @@ func New(api *design.APIDefinition) (*Swagger, error) {
 			s.Paths[k] = v
 		}
 		err := res.IterateFileServers(func(fs *design.FileServerDefinition) error {
+			if !mustGenerate(fs.Metadata) {
+				return nil
+			}
 			return buildPathFromFileServer(s, api, fs)
 		})
 		if err != nil {
 			return err
 		}
 		return res.IterateActions(func(a *design.ActionDefinition) error {
+			if !mustGenerate(a.Metadata) {
+				return nil
+			}
 			for _, route := range a.Routes {
 				if err := buildPathFromDefinition(s, api, route, basePath); err != nil {
 					return err
@@ -458,17 +464,34 @@ func New(api *design.APIDefinition) (*Swagger, error) {
 	return s, nil
 }
 
+// mustGenerate returns true if the metadata indicates that a Swagger specification should be
+// generated, false otherwise.
+func mustGenerate(meta dslengine.MetadataDefinition) bool {
+	if m, ok := meta["swagger:generate"]; ok {
+		if len(m) > 0 && m[0] == "false" {
+			return false
+		}
+	}
+	return true
+}
+
 // hasAbsoluteRoutes returns true if any action exposed by the API uses an absolute route of if the
 // API has file servers. This is needed as Swagger does not support exceptions to the base path so
 // if the API has any absolute route the base path must be "/" and all routes must be absolutes.
 func hasAbsoluteRoutes(api *design.APIDefinition) bool {
 	hasAbsoluteRoutes := false
 	for _, res := range api.Resources {
-		if len(res.FileServers) > 0 {
+		for _, fs := range res.FileServers {
+			if !mustGenerate(fs.Metadata) {
+				continue
+			}
 			hasAbsoluteRoutes = true
 			break
 		}
 		for _, a := range res.Actions {
+			if !mustGenerate(a.Metadata) {
+				continue
+			}
 			for _, ro := range a.Routes {
 				if ro.IsAbsolute() {
 					hasAbsoluteRoutes = true
@@ -678,6 +701,7 @@ func paramFor(at *design.AttributeDefinition, name, in string, required bool) *P
 	}
 	if at.Type.IsArray() {
 		p.Items = itemsFromDefinition(at.Type.ToArray().ElemType)
+		p.CollectionFormat = "multi"
 	}
 	p.Extensions = extensionsFromDefinition(at.Metadata)
 	initValidations(at, p)
@@ -733,7 +757,12 @@ func responseSpecFromDefinition(s *Swagger, api *design.APIDefinition, r *design
 	var schema *genschema.JSONSchema
 	if r.MediaType != "" {
 		if mt, ok := api.MediaTypes[design.CanonicalIdentifier(r.MediaType)]; ok {
-			schema = genschema.TypeSchema(api, mt)
+			view := r.ViewName
+			if view == "" {
+				view = design.DefaultView
+			}
+			schema = genschema.NewJSONSchema()
+			schema.Ref = genschema.MediaTypeRef(api, mt, view)
 		}
 	}
 	headers, err := headersFromDefinition(r.Headers)
@@ -885,7 +914,7 @@ func buildPathFromDefinition(s *Swagger, api *design.APIDefinition, route *desig
 			Name:        "payload",
 			In:          "body",
 			Description: action.Payload.Description,
-			Required:    true,
+			Required:    !action.PayloadOptional,
 			Schema:      payloadSchema,
 		}
 		params = append(params, pp)
@@ -921,6 +950,7 @@ func buildPathFromDefinition(s *Swagger, api *design.APIDefinition, route *desig
 		Extensions:   extensionsFromDefinition(route.Metadata),
 	}
 
+	computeProduces(operation, s, action)
 	applySecurity(operation, action.Security)
 
 	key := design.WildcardRegex.ReplaceAllStringFunc(
@@ -929,9 +959,6 @@ func buildPathFromDefinition(s *Swagger, api *design.APIDefinition, route *desig
 			return fmt.Sprintf("/{%s}", w[2:])
 		},
 	)
-	if key == "" {
-		key = "/"
-	}
 	bp := design.WildcardRegex.ReplaceAllStringFunc(
 		basePath,
 		func(w string) string {
@@ -940,6 +967,9 @@ func buildPathFromDefinition(s *Swagger, api *design.APIDefinition, route *desig
 	)
 	if bp != "/" {
 		key = strings.TrimPrefix(key, bp)
+	}
+	if key == "" {
+		key = "/"
 	}
 	var path interface{}
 	var ok bool
@@ -966,6 +996,40 @@ func buildPathFromDefinition(s *Swagger, api *design.APIDefinition, route *desig
 	}
 	p.Extensions = extensionsFromDefinition(route.Parent.Metadata)
 	return nil
+}
+
+func computeProduces(operation *Operation, s *Swagger, action *design.ActionDefinition) {
+	produces := make(map[string]bool)
+	producesSorted := make([]string, 0)
+	action.IterateResponses(func(resp *design.ResponseDefinition) error {
+		if resp.MediaType != "" {
+			produces[resp.MediaType] = true
+			producesSorted = append(producesSorted, resp.MediaType)
+		}
+		return nil
+	})
+	subset := true
+	for p := range produces {
+		found := false
+		for _, p2 := range s.Produces {
+			if p == p2 {
+				found = true
+				break
+			}
+		}
+		if !found {
+			subset = false
+			break
+		}
+	}
+	if !subset {
+		operation.Produces = make([]string, len(producesSorted))
+		i := 0
+		for _, p := range producesSorted {
+			operation.Produces[i] = p
+			i++
+		}
+	}
 }
 
 func applySecurity(operation *Operation, security *design.SecurityDefinition) {

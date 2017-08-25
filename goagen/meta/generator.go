@@ -33,6 +33,10 @@ type Generator struct {
 	// generator on the command line.
 	Flags map[string]string
 
+	// CustomFlags is the list of arguments that appear after the -- separator.
+	// These arguments are appended verbatim to the final generator command line.
+	CustomFlags []string
+
 	// OutDir is the final output directory.
 	OutDir string
 
@@ -44,7 +48,7 @@ type Generator struct {
 
 // NewGenerator returns a meta generator that can run an actual Generator
 // given its factory method and command line flags.
-func NewGenerator(genfunc string, imports []*codegen.ImportSpec, flags map[string]string) (*Generator, error) {
+func NewGenerator(genfunc string, imports []*codegen.ImportSpec, flags map[string]string, customflags []string) (*Generator, error) {
 	var (
 		outDir, designPkgPath string
 		debug                 bool
@@ -68,6 +72,7 @@ func NewGenerator(genfunc string, imports []*codegen.ImportSpec, flags map[strin
 		Genfunc:       genfunc,
 		Imports:       imports,
 		Flags:         flags,
+		CustomFlags:   customflags,
 		OutDir:        outDir,
 		DesignPkgPath: designPkgPath,
 		debug:         debug,
@@ -142,7 +147,11 @@ func (m *Generator) Generate() ([]string, error) {
 }
 
 func (m *Generator) generateToolSourceCode(pkg *codegen.Package) {
-	file := pkg.CreateSourceFile("main.go")
+	file, err := pkg.CreateSourceFile("main.go")
+	if err != nil {
+		panic(err) // bug
+	}
+	defer file.Close()
 	imports := append(m.Imports,
 		codegen.SimpleImport("fmt"),
 		codegen.SimpleImport("strings"),
@@ -163,8 +172,7 @@ func (m *Generator) generateToolSourceCode(pkg *codegen.Package) {
 		"DesignPackage": m.DesignPkgPath,
 		"PkgName":       pkgName,
 	}
-	err = tmpl.Execute(file, context)
-	if err != nil {
+	if err := tmpl.Execute(file, context); err != nil {
 		panic(err) // bug
 	}
 }
@@ -172,14 +180,16 @@ func (m *Generator) generateToolSourceCode(pkg *codegen.Package) {
 // spawn runs the compiled generator using the arguments initialized by Kingpin
 // when parsing the command line.
 func (m *Generator) spawn(genbin string) ([]string, error) {
-	args := make([]string, len(m.Flags))
-	i := 0
+	var args []string
 	for k, v := range m.Flags {
-		args[i] = fmt.Sprintf("--%s=%s", k, v)
-		i++
+		if k == "debug" {
+			continue
+		}
+		args = append(args, fmt.Sprintf("--%s=%s", k, v))
 	}
 	sort.Strings(args)
 	args = append(args, "--version="+version.String())
+	args = append(args, m.CustomFlags...)
 	cmd := exec.Command(genbin, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

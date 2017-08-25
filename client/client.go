@@ -10,7 +10,7 @@ import (
 	"net/http/httputil"
 	"time"
 
-	"golang.org/x/net/context"
+	"context"
 
 	"github.com/goadesign/goa"
 )
@@ -243,4 +243,9 @@ func ContextWithRequestID(ctx context.Context) (context.Context, string) {
 		ctx = context.WithValue(ctx, reqIDKey, reqID)
 	}
 	return ctx, reqID
+}
+
+// SetContextRequestID sets a request ID in the given context and returns a new context.
+func SetContextRequestID(ctx context.Context, reqID string) context.Context {
+	return context.WithValue(ctx, reqIDKey, reqID)
 }

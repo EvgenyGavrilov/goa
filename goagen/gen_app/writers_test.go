@@ -24,7 +24,9 @@ var _ = Describe("ContextsWriter", func() {
 		Ω(err).ShouldNot(HaveOccurred())
 		pkg, err := workspace.NewPackage("contexts")
 		Ω(err).ShouldNot(HaveOccurred())
-		src := pkg.CreateSourceFile("test.go")
+		src, err := pkg.CreateSourceFile("test.go")
+		Ω(err).ShouldNot(HaveOccurred())
+		defer src.Close()
 		filename = src.Abs()
 		writer, err = genapp.NewContextsWriter(filename)
 		Ω(err).ShouldNot(HaveOccurred())
@@ -51,6 +53,7 @@ var _ = Describe("ContextsWriter", func() {
 			var params, headers *design.AttributeDefinition
 			var payload *design.UserTypeDefinition
 			var responses map[string]*design.ResponseDefinition
+			var routes []*design.RouteDefinition
 
 			var data *genapp.ContextTemplateData
 
@@ -59,6 +62,7 @@ var _ = Describe("ContextsWriter", func() {
 				headers = nil
 				payload = nil
 				responses = nil
+				routes = nil
 				data = nil
 			})
 
@@ -71,6 +75,7 @@ var _ = Describe("ContextsWriter", func() {
 					Payload:      payload,
 					Headers:      headers,
 					Responses:    responses,
+					Routes:       routes,
 					API:          design.Design,
 					DefaultPkg:   "",
 				}
@@ -176,13 +181,21 @@ var _ = Describe("ContextsWriter", func() {
 			})
 
 			Context("with an integer param", func() {
+				var (
+					intParam   *design.AttributeDefinition
+					dataType   design.Object
+					validation *dslengine.ValidationDefinition
+				)
+
 				BeforeEach(func() {
-					intParam := &design.AttributeDefinition{Type: design.Integer}
-					dataType := design.Object{
+					intParam = &design.AttributeDefinition{Type: design.Integer}
+					dataType = design.Object{
 						"param": intParam,
 					}
+					validation = &dslengine.ValidationDefinition{}
 					params = &design.AttributeDefinition{
-						Type: dataType,
+						Type:       dataType,
+						Validation: validation,
 					}
 				})
 
@@ -196,20 +209,79 @@ var _ = Describe("ContextsWriter", func() {
 					Ω(written).Should(ContainSubstring(intContext))
 					Ω(written).Should(ContainSubstring(intContextFactory))
 				})
+
+				Context("with a default value", func() {
+					BeforeEach(func() {
+						intParam.SetDefault(2)
+					})
+
+					It("writes the integer contexts code", func() {
+						err := writer.Execute(data)
+						Ω(err).ShouldNot(HaveOccurred())
+						b, err := ioutil.ReadFile(filename)
+						Ω(err).ShouldNot(HaveOccurred())
+						written := string(b)
+						Ω(written).ShouldNot(BeEmpty())
+						Ω(written).Should(ContainSubstring(intDefaultContext))
+						Ω(written).Should(ContainSubstring(intDefaultContextFactory))
+					})
+				})
+
+				Context("with required attribute", func() {
+					BeforeEach(func() {
+						validation.Required = []string{"param"}
+					})
+
+					It("writes the integer contexts code", func() {
+						err := writer.Execute(data)
+						Ω(err).ShouldNot(HaveOccurred())
+						b, err := ioutil.ReadFile(filename)
+						Ω(err).ShouldNot(HaveOccurred())
+						written := string(b)
+						Ω(written).ShouldNot(BeEmpty())
+						Ω(written).Should(ContainSubstring(intRequiredContext))
+						Ω(written).Should(ContainSubstring(intRequiredContextFactory))
+					})
+
+					Context("with a default value", func() {
+						BeforeEach(func() {
+							intParam.SetDefault(2)
+						})
+
+						It("writes the integer contexts code", func() {
+							err := writer.Execute(data)
+							Ω(err).ShouldNot(HaveOccurred())
+							b, err := ioutil.ReadFile(filename)
+							Ω(err).ShouldNot(HaveOccurred())
+							written := string(b)
+							Ω(written).ShouldNot(BeEmpty())
+							Ω(written).Should(ContainSubstring(intRequiredDefaultContext))
+							Ω(written).Should(ContainSubstring(intRequiredDefaultContextFactory))
+						})
+					})
+				})
 			})
 
-			Context("with a string param", func() {
+			Context("with an string param", func() {
+				var (
+					strParam   *design.AttributeDefinition
+					dataType   design.Object
+					validation *dslengine.ValidationDefinition
+				)
+
 				BeforeEach(func() {
-					strParam := &design.AttributeDefinition{Type: design.String}
-					dataType := design.Object{
+					strParam = &design.AttributeDefinition{Type: design.String}
+					dataType = design.Object{
 						"param": strParam,
 					}
+					validation = &dslengine.ValidationDefinition{}
 					params = &design.AttributeDefinition{
-						Type: dataType,
+						Type:       dataType,
+						Validation: validation,
 					}
 				})
 
-				It("writes the contexts code", func() {
+				It("writes the string contexts code", func() {
 					err := writer.Execute(data)
 					Ω(err).ShouldNot(HaveOccurred())
 					b, err := ioutil.ReadFile(filename)
@@ -219,20 +291,79 @@ var _ = Describe("ContextsWriter", func() {
 					Ω(written).Should(ContainSubstring(strContext))
 					Ω(written).Should(ContainSubstring(strContextFactory))
 				})
+
+				Context("with a default value", func() {
+					BeforeEach(func() {
+						strParam.SetDefault("foo")
+					})
+
+					It("writes the string contexts code", func() {
+						err := writer.Execute(data)
+						Ω(err).ShouldNot(HaveOccurred())
+						b, err := ioutil.ReadFile(filename)
+						Ω(err).ShouldNot(HaveOccurred())
+						written := string(b)
+						Ω(written).ShouldNot(BeEmpty())
+						Ω(written).Should(ContainSubstring(strNonOptionalContext))
+						Ω(written).Should(ContainSubstring(strDefaultContextFactory))
+					})
+				})
+
+				Context("with required attribute", func() {
+					BeforeEach(func() {
+						validation.Required = []string{"param"}
+					})
+
+					It("writes the String contexts code", func() {
+						err := writer.Execute(data)
+						Ω(err).ShouldNot(HaveOccurred())
+						b, err := ioutil.ReadFile(filename)
+						Ω(err).ShouldNot(HaveOccurred())
+						written := string(b)
+						Ω(written).ShouldNot(BeEmpty())
+						Ω(written).Should(ContainSubstring(strNonOptionalContext))
+						Ω(written).Should(ContainSubstring(strRequiredContextFactory))
+					})
+
+					Context("with a default value", func() {
+						BeforeEach(func() {
+							strParam.SetDefault("foo")
+						})
+
+						It("writes the integer contexts code", func() {
+							err := writer.Execute(data)
+							Ω(err).ShouldNot(HaveOccurred())
+							b, err := ioutil.ReadFile(filename)
+							Ω(err).ShouldNot(HaveOccurred())
+							written := string(b)
+							Ω(written).ShouldNot(BeEmpty())
+							Ω(written).Should(ContainSubstring(strNonOptionalContext))
+							Ω(written).Should(ContainSubstring(strDefaultContextFactory))
+						})
+					})
+				})
 			})
 
 			Context("with a number param", func() {
+				var (
+					numParam   *design.AttributeDefinition
+					dataType   design.Object
+					validation *dslengine.ValidationDefinition
+				)
+
 				BeforeEach(func() {
-					numParam := &design.AttributeDefinition{Type: design.Number}
-					dataType := design.Object{
+					numParam = &design.AttributeDefinition{Type: design.Number}
+					dataType = design.Object{
 						"param": numParam,
 					}
+					validation = &dslengine.ValidationDefinition{}
 					params = &design.AttributeDefinition{
-						Type: dataType,
+						Type:       dataType,
+						Validation: validation,
 					}
 				})
 
-				It("writes the contexts code", func() {
+				It("writes the number contexts code", func() {
 					err := writer.Execute(data)
 					Ω(err).ShouldNot(HaveOccurred())
 					b, err := ioutil.ReadFile(filename)
@@ -242,20 +373,79 @@ var _ = Describe("ContextsWriter", func() {
 					Ω(written).Should(ContainSubstring(numContext))
 					Ω(written).Should(ContainSubstring(numContextFactory))
 				})
+
+				Context("with a default value", func() {
+					BeforeEach(func() {
+						numParam.SetDefault(2.3)
+					})
+
+					It("writes the number contexts code", func() {
+						err := writer.Execute(data)
+						Ω(err).ShouldNot(HaveOccurred())
+						b, err := ioutil.ReadFile(filename)
+						Ω(err).ShouldNot(HaveOccurred())
+						written := string(b)
+						Ω(written).ShouldNot(BeEmpty())
+						Ω(written).Should(ContainSubstring(numNonOptionalContext))
+						Ω(written).Should(ContainSubstring(numDefaultContextFactory))
+					})
+				})
+
+				Context("with required attribute", func() {
+					BeforeEach(func() {
+						validation.Required = []string{"param"}
+					})
+
+					It("writes the number contexts code", func() {
+						err := writer.Execute(data)
+						Ω(err).ShouldNot(HaveOccurred())
+						b, err := ioutil.ReadFile(filename)
+						Ω(err).ShouldNot(HaveOccurred())
+						written := string(b)
+						Ω(written).ShouldNot(BeEmpty())
+						Ω(written).Should(ContainSubstring(numNonOptionalContext))
+						Ω(written).Should(ContainSubstring(numRequiredContextFactory))
+					})
+
+					Context("with a default value", func() {
+						BeforeEach(func() {
+							numParam.SetDefault(2.3)
+						})
+
+						It("writes the number contexts code", func() {
+							err := writer.Execute(data)
+							Ω(err).ShouldNot(HaveOccurred())
+							b, err := ioutil.ReadFile(filename)
+							Ω(err).ShouldNot(HaveOccurred())
+							written := string(b)
+							Ω(written).ShouldNot(BeEmpty())
+							Ω(written).Should(ContainSubstring(numNonOptionalContext))
+							Ω(written).Should(ContainSubstring(numDefaultContextFactory))
+						})
+					})
+				})
 			})
 
 			Context("with a boolean param", func() {
+				var (
+					boolParam  *design.AttributeDefinition
+					dataType   design.Object
+					validation *dslengine.ValidationDefinition
+				)
+
 				BeforeEach(func() {
-					boolParam := &design.AttributeDefinition{Type: design.Boolean}
-					dataType := design.Object{
+					boolParam = &design.AttributeDefinition{Type: design.Boolean}
+					dataType = design.Object{
 						"param": boolParam,
 					}
+					validation = &dslengine.ValidationDefinition{}
 					params = &design.AttributeDefinition{
-						Type: dataType,
+						Type:       dataType,
+						Validation: validation,
 					}
 				})
 
-				It("writes the contexts code", func() {
+				It("writes the boolean contexts code", func() {
 					err := writer.Execute(data)
 					Ω(err).ShouldNot(HaveOccurred())
 					b, err := ioutil.ReadFile(filename)
@@ -265,23 +455,79 @@ var _ = Describe("ContextsWriter", func() {
 					Ω(written).Should(ContainSubstring(boolContext))
 					Ω(written).Should(ContainSubstring(boolContextFactory))
 				})
+
+				Context("with a default value", func() {
+					BeforeEach(func() {
+						boolParam.SetDefault(true)
+					})
+
+					It("writes the boolean contexts code", func() {
+						err := writer.Execute(data)
+						Ω(err).ShouldNot(HaveOccurred())
+						b, err := ioutil.ReadFile(filename)
+						Ω(err).ShouldNot(HaveOccurred())
+						written := string(b)
+						Ω(written).ShouldNot(BeEmpty())
+						Ω(written).Should(ContainSubstring(boolNonOptionalContext))
+						Ω(written).Should(ContainSubstring(boolDefaultContextFactory))
+					})
+				})
+
+				Context("with required attribute", func() {
+					BeforeEach(func() {
+						validation.Required = []string{"param"}
+					})
+
+					It("writes the boolean contexts code", func() {
+						err := writer.Execute(data)
+						Ω(err).ShouldNot(HaveOccurred())
+						b, err := ioutil.ReadFile(filename)
+						Ω(err).ShouldNot(HaveOccurred())
+						written := string(b)
+						Ω(written).ShouldNot(BeEmpty())
+						Ω(written).Should(ContainSubstring(boolNonOptionalContext))
+						Ω(written).Should(ContainSubstring(boolRequiredContextFactory))
+					})
+
+					Context("with a default value", func() {
+						BeforeEach(func() {
+							boolParam.SetDefault(true)
+						})
+
+						It("writes the boolean contexts code", func() {
+							err := writer.Execute(data)
+							Ω(err).ShouldNot(HaveOccurred())
+							b, err := ioutil.ReadFile(filename)
+							Ω(err).ShouldNot(HaveOccurred())
+							written := string(b)
+							Ω(written).ShouldNot(BeEmpty())
+							Ω(written).Should(ContainSubstring(boolNonOptionalContext))
+							Ω(written).Should(ContainSubstring(boolDefaultContextFactory))
+						})
+					})
+				})
 			})
 
-			Context("with an array param", func() {
+			Context("with a array param", func() {
+				var (
+					arrayParam *design.AttributeDefinition
+					dataType   design.Object
+					validation *dslengine.ValidationDefinition
+				)
+
 				BeforeEach(func() {
-					str := &design.AttributeDefinition{Type: design.String}
-					arrayParam := &design.AttributeDefinition{
-						Type: &design.Array{ElemType: str},
-					}
-					dataType := design.Object{
+					arrayParam = &design.AttributeDefinition{Type: &design.Array{ElemType: &design.AttributeDefinition{Type: design.String}}}
+					dataType = design.Object{
 						"param": arrayParam,
 					}
+					validation = &dslengine.ValidationDefinition{}
 					params = &design.AttributeDefinition{
-						Type: dataType,
+						Type:       dataType,
+						Validation: validation,
 					}
 				})
 
-				It("writes the contexts code", func() {
+				It("writes the array contexts code", func() {
 					err := writer.Execute(data)
 					Ω(err).ShouldNot(HaveOccurred())
 					b, err := ioutil.ReadFile(filename)
@@ -291,23 +537,96 @@ var _ = Describe("ContextsWriter", func() {
 					Ω(written).Should(ContainSubstring(arrayContext))
 					Ω(written).Should(ContainSubstring(arrayContextFactory))
 				})
+
+				Context("using a path param", func() {
+					BeforeEach(func() {
+						route := &design.RouteDefinition{Path: "/:param"}
+						routes = append(routes, route)
+					})
+
+					It("writes the array contexts code", func() {
+						err := writer.Execute(data)
+						Ω(err).ShouldNot(HaveOccurred())
+						b, err := ioutil.ReadFile(filename)
+						Ω(err).ShouldNot(HaveOccurred())
+						written := string(b)
+						Ω(written).ShouldNot(BeEmpty())
+						Ω(written).Should(ContainSubstring(arrayParamContextFactory))
+					})
+				})
+
+				Context("with a default value", func() {
+					BeforeEach(func() {
+						arrayParam.SetDefault([]interface{}{"foo", "bar", "baz"})
+					})
+
+					It("writes the array contexts code", func() {
+						err := writer.Execute(data)
+						Ω(err).ShouldNot(HaveOccurred())
+						b, err := ioutil.ReadFile(filename)
+						Ω(err).ShouldNot(HaveOccurred())
+						written := string(b)
+						Ω(written).ShouldNot(BeEmpty())
+						Ω(written).Should(ContainSubstring(arrayContext))
+						Ω(written).Should(ContainSubstring(arrayDefaultContextFactory))
+					})
+				})
+
+				Context("with required attribute", func() {
+					BeforeEach(func() {
+						validation.Required = []string{"param"}
+					})
+
+					It("writes the array contexts code", func() {
+						err := writer.Execute(data)
+						Ω(err).ShouldNot(HaveOccurred())
+						b, err := ioutil.ReadFile(filename)
+						Ω(err).ShouldNot(HaveOccurred())
+						written := string(b)
+						Ω(written).ShouldNot(BeEmpty())
+						Ω(written).Should(ContainSubstring(arrayContext))
+						Ω(written).Should(ContainSubstring(arrayRequiredContextFactory))
+					})
+
+					Context("with a default value", func() {
+						BeforeEach(func() {
+							arrayParam.SetDefault([]interface{}{"foo", "bar", "baz"})
+						})
+
+						It("writes the array contexts code", func() {
+							err := writer.Execute(data)
+							Ω(err).ShouldNot(HaveOccurred())
+							b, err := ioutil.ReadFile(filename)
+							Ω(err).ShouldNot(HaveOccurred())
+							written := string(b)
+							Ω(written).ShouldNot(BeEmpty())
+							Ω(written).Should(ContainSubstring(arrayContext))
+							Ω(written).Should(ContainSubstring(arrayDefaultContextFactory))
+						})
+					})
+				})
 			})
 
-			Context("with an integer array param", func() {
+			Context("with an int array param", func() {
+				var (
+					arrayParam *design.AttributeDefinition
+					dataType   design.Object
+					validation *dslengine.ValidationDefinition
+				)
+
 				BeforeEach(func() {
-					i := &design.AttributeDefinition{Type: design.Integer}
-					intArrayParam := &design.AttributeDefinition{
-						Type: &design.Array{ElemType: i},
+					arrayParam = &design.AttributeDefinition{Type: &design.Array{ElemType: &design.AttributeDefinition{Type: design.Integer}}}
+					dataType = design.Object{
+						"param": arrayParam,
 					}
-					dataType := design.Object{
-						"param": intArrayParam,
-					}
+					validation = &dslengine.ValidationDefinition{}
 					params = &design.AttributeDefinition{
-						Type: dataType,
+						Type:       dataType,
+						Validation: validation,
 					}
 				})
 
-				It("writes the contexts code", func() {
+				It("writes the array contexts code", func() {
 					err := writer.Execute(data)
 					Ω(err).ShouldNot(HaveOccurred())
 					b, err := ioutil.ReadFile(filename)
@@ -316,6 +635,57 @@ var _ = Describe("ContextsWriter", func() {
 					Ω(written).ShouldNot(BeEmpty())
 					Ω(written).Should(ContainSubstring(intArrayContext))
 					Ω(written).Should(ContainSubstring(intArrayContextFactory))
+				})
+
+				Context("with a default value", func() {
+					BeforeEach(func() {
+						arrayParam.SetDefault([]interface{}{1, 1, 2, 3, 5, 8})
+					})
+
+					It("writes the array contexts code", func() {
+						err := writer.Execute(data)
+						Ω(err).ShouldNot(HaveOccurred())
+						b, err := ioutil.ReadFile(filename)
+						Ω(err).ShouldNot(HaveOccurred())
+						written := string(b)
+						Ω(written).ShouldNot(BeEmpty())
+						Ω(written).Should(ContainSubstring(intArrayContext))
+						Ω(written).Should(ContainSubstring(intArrayDefaultContextFactory))
+					})
+				})
+
+				Context("with required attribute", func() {
+					BeforeEach(func() {
+						validation.Required = []string{"param"}
+					})
+
+					It("writes the array contexts code", func() {
+						err := writer.Execute(data)
+						Ω(err).ShouldNot(HaveOccurred())
+						b, err := ioutil.ReadFile(filename)
+						Ω(err).ShouldNot(HaveOccurred())
+						written := string(b)
+						Ω(written).ShouldNot(BeEmpty())
+						Ω(written).Should(ContainSubstring(intArrayContext))
+						Ω(written).Should(ContainSubstring(intArrayRequiredContextFactory))
+					})
+
+					Context("with a default value", func() {
+						BeforeEach(func() {
+							arrayParam.SetDefault([]interface{}{1, 1, 2, 3, 5, 8})
+						})
+
+						It("writes the array contexts code", func() {
+							err := writer.Execute(data)
+							Ω(err).ShouldNot(HaveOccurred())
+							b, err := ioutil.ReadFile(filename)
+							Ω(err).ShouldNot(HaveOccurred())
+							written := string(b)
+							Ω(written).ShouldNot(BeEmpty())
+							Ω(written).Should(ContainSubstring(intArrayContext))
+							Ω(written).Should(ContainSubstring(intArrayDefaultContextFactory))
+						})
+					})
 				})
 			})
 
@@ -536,7 +906,9 @@ var _ = Describe("ControllersWriter", func() {
 		Ω(err).ShouldNot(HaveOccurred())
 		pkg, err := workspace.NewPackage("controllers")
 		Ω(err).ShouldNot(HaveOccurred())
-		src := pkg.CreateSourceFile("test.go")
+		src, err := pkg.CreateSourceFile("test.go")
+		Ω(err).ShouldNot(HaveOccurred())
+		defer src.Close()
 		filename = src.Abs()
 	})
 
@@ -598,6 +970,7 @@ var _ = Describe("ControllersWriter", func() {
 				BeforeEach(func() {
 					origins = []*design.CORSDefinition{
 						{
+							// NB: including backslash to ensure proper escaping
 							Origin:      "here.example.com",
 							Headers:     []string{"X-One", "X-Two"},
 							Methods:     []string{"GET", "POST"},
@@ -605,7 +978,7 @@ var _ = Describe("ControllersWriter", func() {
 							Credentials: true,
 						},
 					}
-					preflightPaths = []string{"/public/*filepath"}
+					preflightPaths = []string{"/public/star\\*star/*filepath"}
 				})
 
 				It("writes the OPTIONS handler code", func() {
@@ -658,7 +1031,8 @@ var _ = Describe("ControllersWriter", func() {
 						payload = payloads[i]
 					}
 					as[i] = map[string]interface{}{
-						"Name": a,
+						"Name":       codegen.Goify(a, true),
+						"DesignName": a,
 						"Routes": []*design.RouteDefinition{
 							{
 								Verb: verbs[i],
@@ -693,7 +1067,7 @@ var _ = Describe("ControllersWriter", func() {
 
 			Context("with a simple controller", func() {
 				BeforeEach(func() {
-					actions = []string{"List"}
+					actions = []string{"list"}
 					verbs = []string{"GET"}
 					paths = []string{"/accounts/:accountID/bottles"}
 					contexts = []string{"ListBottleContext"}
@@ -713,7 +1087,7 @@ var _ = Describe("ControllersWriter", func() {
 
 			Context("with actions that take a payload", func() {
 				BeforeEach(func() {
-					actions = []string{"List"}
+					actions = []string{"list"}
 					verbs = []string{"GET"}
 					paths = []string{"/accounts/:accountID/bottles"}
 					contexts = []string{"ListBottleContext"}
@@ -743,7 +1117,7 @@ var _ = Describe("ControllersWriter", func() {
 			})
 			Context("with actions that take a payload with a required validation", func() {
 				BeforeEach(func() {
-					actions = []string{"List"}
+					actions = []string{"list"}
 					required := &dslengine.ValidationDefinition{
 						Required: []string{"id"},
 					}
@@ -778,7 +1152,7 @@ var _ = Describe("ControllersWriter", func() {
 
 			Context("with multiple controllers", func() {
 				BeforeEach(func() {
-					actions = []string{"List", "Show"}
+					actions = []string{"list", "show"}
 					verbs = []string{"GET", "GET"}
 					paths = []string{"/accounts/:accountID/bottles", "/accounts/:accountID/bottles/:id"}
 					contexts = []string{"ListBottleContext", "ShowBottleContext"}
@@ -798,7 +1172,7 @@ var _ = Describe("ControllersWriter", func() {
 
 			Context("with encoder and decoder maps", func() {
 				BeforeEach(func() {
-					actions = []string{"List"}
+					actions = []string{"list"}
 					verbs = []string{"GET"}
 					paths = []string{"/accounts/:accountID/bottles"}
 					contexts = []string{"ListBottleContext"}
@@ -831,7 +1205,7 @@ var _ = Describe("ControllersWriter", func() {
 
 			Context("with multiple origins", func() {
 				BeforeEach(func() {
-					actions = []string{"List"}
+					actions = []string{"list"}
 					verbs = []string{"GET"}
 					paths = []string{"/accounts"}
 					contexts = []string{"ListBottleContext"}
@@ -866,7 +1240,7 @@ var _ = Describe("ControllersWriter", func() {
 
 			Context("with regexp origins", func() {
 				BeforeEach(func() {
-					actions = []string{"List"}
+					actions = []string{"list"}
 					verbs = []string{"GET"}
 					paths = []string{"/accounts"}
 					contexts = []string{"ListBottleContext"}
@@ -915,7 +1289,9 @@ var _ = Describe("HrefWriter", func() {
 		Ω(err).ShouldNot(HaveOccurred())
 		pkg, err := workspace.NewPackage("controllers")
 		Ω(err).ShouldNot(HaveOccurred())
-		src := pkg.CreateSourceFile("test.go")
+		src, err := pkg.CreateSourceFile("test.go")
+		Ω(err).ShouldNot(HaveOccurred())
+		defer src.Close()
 		filename = src.Abs()
 	})
 
@@ -1036,6 +1412,119 @@ var _ = Describe("HrefWriter", func() {
 	})
 })
 
+var _ = Describe("UserTypesWriter", func() {
+	var writer *genapp.UserTypesWriter
+	var workspace *codegen.Workspace
+	var filename string
+
+	BeforeEach(func() {
+		var err error
+		workspace, err = codegen.NewWorkspace("test")
+		Ω(err).ShouldNot(HaveOccurred())
+		pkg, err := workspace.NewPackage("controllers")
+		Ω(err).ShouldNot(HaveOccurred())
+		src, err := pkg.CreateSourceFile("test.go")
+		Ω(err).ShouldNot(HaveOccurred())
+		defer src.Close()
+		filename = src.Abs()
+	})
+
+	JustBeforeEach(func() {
+		var err error
+		writer, err = genapp.NewUserTypesWriter(filename)
+		Ω(err).ShouldNot(HaveOccurred())
+	})
+
+	AfterEach(func() {
+		workspace.Delete()
+	})
+
+	Context("correctly configured", func() {
+		Context("with data", func() {
+			var data *design.UserTypeDefinition
+			var attDef *design.AttributeDefinition
+			var typeName string
+
+			BeforeEach(func() {
+				data = nil
+				attDef = nil
+				typeName = ""
+			})
+
+			JustBeforeEach(func() {
+				data = &design.UserTypeDefinition{
+					AttributeDefinition: attDef,
+					TypeName:            typeName,
+				}
+			})
+
+			Context("with a simple user type", func() {
+				BeforeEach(func() {
+					attDef = &design.AttributeDefinition{
+						Type: design.Object{
+							"name": &design.AttributeDefinition{
+								Type: design.String,
+							},
+						},
+					}
+					typeName = "SimplePayload"
+				})
+				It("writes the simple user type code", func() {
+					err := writer.Execute(data)
+					Ω(err).ShouldNot(HaveOccurred())
+					b, err := ioutil.ReadFile(filename)
+					Ω(err).ShouldNot(HaveOccurred())
+					written := string(b)
+					Ω(written).ShouldNot(BeEmpty())
+					Ω(written).Should(ContainSubstring(simpleUserType))
+				})
+			})
+
+			Context("with a user type including hash", func() {
+				BeforeEach(func() {
+					attDef = &design.AttributeDefinition{
+						Type: design.Object{
+							"name": &design.AttributeDefinition{
+								Type: design.String,
+							},
+							"misc": &design.AttributeDefinition{
+								Type: &design.Hash{
+									KeyType: &design.AttributeDefinition{
+										Type: design.Integer,
+									},
+									ElemType: &design.AttributeDefinition{
+										Type: &design.UserTypeDefinition{
+											AttributeDefinition: &design.AttributeDefinition{
+												Type: &design.UserTypeDefinition{
+													AttributeDefinition: &design.AttributeDefinition{
+														Type: design.Object{},
+													},
+													TypeName: "Misc",
+												},
+											},
+											TypeName: "MiscPayload",
+										},
+									},
+								},
+							},
+						},
+					}
+					typeName = "ComplexPayload"
+				})
+				It("writes the user type including hash", func() {
+					err := writer.Execute(data)
+					Ω(err).ShouldNot(HaveOccurred())
+					b, err := ioutil.ReadFile(filename)
+					Ω(err).ShouldNot(HaveOccurred())
+					written := string(b)
+					Ω(written).ShouldNot(BeEmpty())
+					Ω(written).Should(ContainSubstring(userTypeIncludingHash))
+				})
+			})
+		})
+	})
+})
+
 const (
 	emptyContext = `
 type ListBottleContext struct {
@@ -1046,11 +1535,12 @@ type ListBottleContext struct {
 `
 
 	emptyContextFactory = `
-func NewListBottleContext(ctx context.Context, service *goa.Service) (*ListBottleContext, error) {
+func NewListBottleContext(ctx context.Context, r *http.Request, service *goa.Service) (*ListBottleContext, error) {
 	var err error
 	resp := goa.ContextResponse(ctx)
 	resp.Service = service
 	req := goa.ContextRequest(ctx)
+	req.Request = r
 	rctx := ListBottleContext{Context: ctx, ResponseData: resp, RequestData: req}
 	return &rctx, err
 }
@@ -1066,11 +1556,12 @@ type ListBottleContext struct {
 `
 
 	intContextFactory = `
-func NewListBottleContext(ctx context.Context, service *goa.Service) (*ListBottleContext, error) {
+func NewListBottleContext(ctx context.Context, r *http.Request, service *goa.Service) (*ListBottleContext, error) {
 	var err error
 	resp := goa.ContextResponse(ctx)
 	resp.Service = service
 	req := goa.ContextRequest(ctx)
+	req.Request = r
 	rctx := ListBottleContext{Context: ctx, ResponseData: resp, RequestData: req}
 	paramParam := req.Params["param"]
 	if len(paramParam) > 0 {
@@ -1079,6 +1570,101 @@ func NewListBottleContext(ctx context.Context, service *goa.Service) (*ListBottl
 			tmp2 := param
 			tmp1 := &tmp2
 			rctx.Param = tmp1
+		} else {
+			err = goa.MergeErrors(err, goa.InvalidParamTypeError("param", rawParam, "integer"))
+		}
+	}
+	return &rctx, err
+}
+`
+
+	intDefaultContext = `
+type ListBottleContext struct {
+	context.Context
+	*goa.ResponseData
+	*goa.RequestData
+	Param int
+}
+`
+
+	intDefaultContextFactory = `
+func NewListBottleContext(ctx context.Context, r *http.Request, service *goa.Service) (*ListBottleContext, error) {
+	var err error
+	resp := goa.ContextResponse(ctx)
+	resp.Service = service
+	req := goa.ContextRequest(ctx)
+	req.Request = r
+	rctx := ListBottleContext{Context: ctx, ResponseData: resp, RequestData: req}
+	paramParam := req.Params["param"]
+	if len(paramParam) == 0 {
+		rctx.Param = 2
+	} else {
+		rawParam := paramParam[0]
+		if param, err2 := strconv.Atoi(rawParam); err2 == nil {
+			rctx.Param = param
+		} else {
+			err = goa.MergeErrors(err, goa.InvalidParamTypeError("param", rawParam, "integer"))
+		}
+	}
+	return &rctx, err
+}
+`
+
+	intRequiredDefaultContext = `
+type ListBottleContext struct {
+	context.Context
+	*goa.ResponseData
+	*goa.RequestData
+	Param int
+}
+`
+
+	intRequiredDefaultContextFactory = `
+func NewListBottleContext(ctx context.Context, r *http.Request, service *goa.Service) (*ListBottleContext, error) {
+	var err error
+	resp := goa.ContextResponse(ctx)
+	resp.Service = service
+	req := goa.ContextRequest(ctx)
+	req.Request = r
+	rctx := ListBottleContext{Context: ctx, ResponseData: resp, RequestData: req}
+	paramParam := req.Params["param"]
+	if len(paramParam) == 0 {
+		rctx.Param = 2
+	} else {
+		rawParam := paramParam[0]
+		if param, err2 := strconv.Atoi(rawParam); err2 == nil {
+			rctx.Param = param
+		} else {
+			err = goa.MergeErrors(err, goa.InvalidParamTypeError("param", rawParam, "integer"))
+		}
+	}
+	return &rctx, err
+}
+`
+
+	intRequiredContext = `
+type ListBottleContext struct {
+	context.Context
+	*goa.ResponseData
+	*goa.RequestData
+	Param int
+}
+`
+	intRequiredContextFactory = `
+func NewListBottleContext(ctx context.Context, r *http.Request, service *goa.Service) (*ListBottleContext, error) {
+	var err error
+	resp := goa.ContextResponse(ctx)
+	resp.Service = service
+	req := goa.ContextRequest(ctx)
+	req.Request = r
+	rctx := ListBottleContext{Context: ctx, ResponseData: resp, RequestData: req}
+	paramParam := req.Params["param"]
+	if len(paramParam) == 0 {
+		err = goa.MergeErrors(err, goa.MissingParamError("param"))
+	} else {
+		rawParam := paramParam[0]
+		if param, err2 := strconv.Atoi(rawParam); err2 == nil {
+			rctx.Param = param
 		} else {
 			err = goa.MergeErrors(err, goa.InvalidParamTypeError("param", rawParam, "integer"))
 		}
@@ -1097,16 +1683,64 @@ type ListBottleContext struct {
 `
 
 	strContextFactory = `
-func NewListBottleContext(ctx context.Context, service *goa.Service) (*ListBottleContext, error) {
+func NewListBottleContext(ctx context.Context, r *http.Request, service *goa.Service) (*ListBottleContext, error) {
 	var err error
 	resp := goa.ContextResponse(ctx)
 	resp.Service = service
 	req := goa.ContextRequest(ctx)
+	req.Request = r
 	rctx := ListBottleContext{Context: ctx, ResponseData: resp, RequestData: req}
 	paramParam := req.Params["param"]
 	if len(paramParam) > 0 {
 		rawParam := paramParam[0]
 		rctx.Param = &rawParam
+	}
+	return &rctx, err
+}
+`
+
+	strNonOptionalContext = `
+type ListBottleContext struct {
+	context.Context
+	*goa.ResponseData
+	*goa.RequestData
+	Param string
+}
+`
+
+	strDefaultContextFactory = `
+func NewListBottleContext(ctx context.Context, r *http.Request, service *goa.Service) (*ListBottleContext, error) {
+	var err error
+	resp := goa.ContextResponse(ctx)
+	resp.Service = service
+	req := goa.ContextRequest(ctx)
+	req.Request = r
+	rctx := ListBottleContext{Context: ctx, ResponseData: resp, RequestData: req}
+	paramParam := req.Params["param"]
+	if len(paramParam) == 0 {
+		rctx.Param = "foo"
+	} else {
+		rawParam := paramParam[0]
+		rctx.Param = rawParam
+	}
+	return &rctx, err
+}
+`
+
+	strRequiredContextFactory = `
+func NewListBottleContext(ctx context.Context, r *http.Request, service *goa.Service) (*ListBottleContext, error) {
+	var err error
+	resp := goa.ContextResponse(ctx)
+	resp.Service = service
+	req := goa.ContextRequest(ctx)
+	req.Request = r
+	rctx := ListBottleContext{Context: ctx, ResponseData: resp, RequestData: req}
+	paramParam := req.Params["param"]
+	if len(paramParam) == 0 {
+		err = goa.MergeErrors(err, goa.MissingParamError("param"))
+	} else {
+		rawParam := paramParam[0]
+		rctx.Param = rawParam
 	}
 	return &rctx, err
 }
@@ -1122,11 +1756,12 @@ type ListBottleContext struct {
 `
 
 	strHeaderContextFactory = `
-func NewListBottleContext(ctx context.Context, service *goa.Service) (*ListBottleContext, error) {
+func NewListBottleContext(ctx context.Context, r *http.Request, service *goa.Service) (*ListBottleContext, error) {
 	var err error
 	resp := goa.ContextResponse(ctx)
 	resp.Service = service
 	req := goa.ContextRequest(ctx)
+	req.Request = r
 	rctx := ListBottleContext{Context: ctx, ResponseData: resp, RequestData: req}
 	headerHeader := req.Header["Header"]
 	if len(headerHeader) > 0 {
@@ -1139,11 +1774,12 @@ func NewListBottleContext(ctx context.Context, service *goa.Service) (*ListBottl
 `
 
 	strHeaderParamContextFactory = `
-func NewListBottleContext(ctx context.Context, service *goa.Service) (*ListBottleContext, error) {
+func NewListBottleContext(ctx context.Context, r *http.Request, service *goa.Service) (*ListBottleContext, error) {
 	var err error
 	resp := goa.ContextResponse(ctx)
 	resp.Service = service
 	req := goa.ContextRequest(ctx)
+	req.Request = r
 	rctx := ListBottleContext{Context: ctx, ResponseData: resp, RequestData: req}
 	headerParam := req.Header["Param"]
 	if len(headerParam) > 0 {
@@ -1170,11 +1806,12 @@ type ListBottleContext struct {
 `
 
 	numContextFactory = `
-func NewListBottleContext(ctx context.Context, service *goa.Service) (*ListBottleContext, error) {
+func NewListBottleContext(ctx context.Context, r *http.Request, service *goa.Service) (*ListBottleContext, error) {
 	var err error
 	resp := goa.ContextResponse(ctx)
 	resp.Service = service
 	req := goa.ContextRequest(ctx)
+	req.Request = r
 	rctx := ListBottleContext{Context: ctx, ResponseData: resp, RequestData: req}
 	paramParam := req.Params["param"]
 	if len(paramParam) > 0 {
@@ -1189,6 +1826,62 @@ func NewListBottleContext(ctx context.Context, service *goa.Service) (*ListBottl
 	return &rctx, err
 }
 `
+
+	numNonOptionalContext = `
+type ListBottleContext struct {
+	context.Context
+	*goa.ResponseData
+	*goa.RequestData
+	Param float64
+}
+`
+
+	numDefaultContextFactory = `
+func NewListBottleContext(ctx context.Context, r *http.Request, service *goa.Service) (*ListBottleContext, error) {
+	var err error
+	resp := goa.ContextResponse(ctx)
+	resp.Service = service
+	req := goa.ContextRequest(ctx)
+	req.Request = r
+	rctx := ListBottleContext{Context: ctx, ResponseData: resp, RequestData: req}
+	paramParam := req.Params["param"]
+	if len(paramParam) == 0 {
+		rctx.Param = 2.300000
+	} else {
+		rawParam := paramParam[0]
+		if param, err2 := strconv.ParseFloat(rawParam, 64); err2 == nil {
+			rctx.Param = param
+		} else {
+			err = goa.MergeErrors(err, goa.InvalidParamTypeError("param", rawParam, "number"))
+		}
+	}
+	return &rctx, err
+}
+`
+
+	numRequiredContextFactory = `
+func NewListBottleContext(ctx context.Context, r *http.Request, service *goa.Service) (*ListBottleContext, error) {
+	var err error
+	resp := goa.ContextResponse(ctx)
+	resp.Service = service
+	req := goa.ContextRequest(ctx)
+	req.Request = r
+	rctx := ListBottleContext{Context: ctx, ResponseData: resp, RequestData: req}
+	paramParam := req.Params["param"]
+	if len(paramParam) == 0 {
+		err = goa.MergeErrors(err, goa.MissingParamError("param"))
+	} else {
+		rawParam := paramParam[0]
+		if param, err2 := strconv.ParseFloat(rawParam, 64); err2 == nil {
+			rctx.Param = param
+		} else {
+			err = goa.MergeErrors(err, goa.InvalidParamTypeError("param", rawParam, "number"))
+		}
+	}
+	return &rctx, err
+}
+`
+
 	boolContext = `
 type ListBottleContext struct {
 	context.Context
@@ -1199,11 +1892,12 @@ type ListBottleContext struct {
 `
 
 	boolContextFactory = `
-func NewListBottleContext(ctx context.Context, service *goa.Service) (*ListBottleContext, error) {
+func NewListBottleContext(ctx context.Context, r *http.Request, service *goa.Service) (*ListBottleContext, error) {
 	var err error
 	resp := goa.ContextResponse(ctx)
 	resp.Service = service
 	req := goa.ContextRequest(ctx)
+	req.Request = r
 	rctx := ListBottleContext{Context: ctx, ResponseData: resp, RequestData: req}
 	paramParam := req.Params["param"]
 	if len(paramParam) > 0 {
@@ -1211,6 +1905,61 @@ func NewListBottleContext(ctx context.Context, service *goa.Service) (*ListBottl
 		if param, err2 := strconv.ParseBool(rawParam); err2 == nil {
 			tmp1 := &param
 			rctx.Param = tmp1
+		} else {
+			err = goa.MergeErrors(err, goa.InvalidParamTypeError("param", rawParam, "boolean"))
+		}
+	}
+	return &rctx, err
+}
+`
+
+	boolNonOptionalContext = `
+type ListBottleContext struct {
+	context.Context
+	*goa.ResponseData
+	*goa.RequestData
+	Param bool
+}
+`
+
+	boolDefaultContextFactory = `
+func NewListBottleContext(ctx context.Context, r *http.Request, service *goa.Service) (*ListBottleContext, error) {
+	var err error
+	resp := goa.ContextResponse(ctx)
+	resp.Service = service
+	req := goa.ContextRequest(ctx)
+	req.Request = r
+	rctx := ListBottleContext{Context: ctx, ResponseData: resp, RequestData: req}
+	paramParam := req.Params["param"]
+	if len(paramParam) == 0 {
+		rctx.Param = true
+	} else {
+		rawParam := paramParam[0]
+		if param, err2 := strconv.ParseBool(rawParam); err2 == nil {
+			rctx.Param = param
+		} else {
+			err = goa.MergeErrors(err, goa.InvalidParamTypeError("param", rawParam, "boolean"))
+		}
+	}
+	return &rctx, err
+}
+`
+
+	boolRequiredContextFactory = `
+func NewListBottleContext(ctx context.Context, r *http.Request, service *goa.Service) (*ListBottleContext, error) {
+	var err error
+	resp := goa.ContextResponse(ctx)
+	resp.Service = service
+	req := goa.ContextRequest(ctx)
+	req.Request = r
+	rctx := ListBottleContext{Context: ctx, ResponseData: resp, RequestData: req}
+	paramParam := req.Params["param"]
+	if len(paramParam) == 0 {
+		err = goa.MergeErrors(err, goa.MissingParamError("param"))
+	} else {
+		rawParam := paramParam[0]
+		if param, err2 := strconv.ParseBool(rawParam); err2 == nil {
+			rctx.Param = param
 		} else {
 			err = goa.MergeErrors(err, goa.InvalidParamTypeError("param", rawParam, "boolean"))
 		}
@@ -1229,14 +1978,70 @@ type ListBottleContext struct {
 `
 
 	arrayContextFactory = `
-func NewListBottleContext(ctx context.Context, service *goa.Service) (*ListBottleContext, error) {
+func NewListBottleContext(ctx context.Context, r *http.Request, service *goa.Service) (*ListBottleContext, error) {
 	var err error
 	resp := goa.ContextResponse(ctx)
 	resp.Service = service
 	req := goa.ContextRequest(ctx)
+	req.Request = r
 	rctx := ListBottleContext{Context: ctx, ResponseData: resp, RequestData: req}
 	paramParam := req.Params["param"]
 	if len(paramParam) > 0 {
+		params := paramParam
+		rctx.Param = params
+	}
+	return &rctx, err
+}
+`
+
+	arrayParamContextFactory = `
+func NewListBottleContext(ctx context.Context, r *http.Request, service *goa.Service) (*ListBottleContext, error) {
+	var err error
+	resp := goa.ContextResponse(ctx)
+	resp.Service = service
+	req := goa.ContextRequest(ctx)
+	req.Request = r
+	rctx := ListBottleContext{Context: ctx, ResponseData: resp, RequestData: req}
+	paramParam := req.Params["param"]
+	if len(paramParam) > 0 {
+		params := paramParam
+		rctx.Param = params
+	}
+	return &rctx, err
+}
+`
+
+	arrayDefaultContextFactory = `
+func NewListBottleContext(ctx context.Context, r *http.Request, service *goa.Service) (*ListBottleContext, error) {
+	var err error
+	resp := goa.ContextResponse(ctx)
+	resp.Service = service
+	req := goa.ContextRequest(ctx)
+	req.Request = r
+	rctx := ListBottleContext{Context: ctx, ResponseData: resp, RequestData: req}
+	paramParam := req.Params["param"]
+	if len(paramParam) == 0 {
+		rctx.Param = []string{"foo", "bar", "baz"}
+	} else {
+		params := paramParam
+		rctx.Param = params
+	}
+	return &rctx, err
+}
+`
+
+	arrayRequiredContextFactory = `
+func NewListBottleContext(ctx context.Context, r *http.Request, service *goa.Service) (*ListBottleContext, error) {
+	var err error
+	resp := goa.ContextResponse(ctx)
+	resp.Service = service
+	req := goa.ContextRequest(ctx)
+	req.Request = r
+	rctx := ListBottleContext{Context: ctx, ResponseData: resp, RequestData: req}
+	paramParam := req.Params["param"]
+	if len(paramParam) == 0 {
+		err = goa.MergeErrors(err, goa.MissingParamError("param"))
+	} else {
 		params := paramParam
 		rctx.Param = params
 	}
@@ -1254,14 +2059,67 @@ type ListBottleContext struct {
 `
 
 	intArrayContextFactory = `
-func NewListBottleContext(ctx context.Context, service *goa.Service) (*ListBottleContext, error) {
+func NewListBottleContext(ctx context.Context, r *http.Request, service *goa.Service) (*ListBottleContext, error) {
 	var err error
 	resp := goa.ContextResponse(ctx)
 	resp.Service = service
 	req := goa.ContextRequest(ctx)
+	req.Request = r
 	rctx := ListBottleContext{Context: ctx, ResponseData: resp, RequestData: req}
 	paramParam := req.Params["param"]
 	if len(paramParam) > 0 {
+		params := make([]int, len(paramParam))
+		for i, rawParam := range paramParam {
+			if param, err2 := strconv.Atoi(rawParam); err2 == nil {
+				params[i] = param
+			} else {
+				err = goa.MergeErrors(err, goa.InvalidParamTypeError("param", rawParam, "integer"))
+			}
+		}
+		rctx.Param = params
+	}
+	return &rctx, err
+}
+`
+
+	intArrayDefaultContextFactory = `
+func NewListBottleContext(ctx context.Context, r *http.Request, service *goa.Service) (*ListBottleContext, error) {
+	var err error
+	resp := goa.ContextResponse(ctx)
+	resp.Service = service
+	req := goa.ContextRequest(ctx)
+	req.Request = r
+	rctx := ListBottleContext{Context: ctx, ResponseData: resp, RequestData: req}
+	paramParam := req.Params["param"]
+	if len(paramParam) == 0 {
+		rctx.Param = []int{1, 1, 2, 3, 5, 8}
+	} else {
+		params := make([]int, len(paramParam))
+		for i, rawParam := range paramParam {
+			if param, err2 := strconv.Atoi(rawParam); err2 == nil {
+				params[i] = param
+			} else {
+				err = goa.MergeErrors(err, goa.InvalidParamTypeError("param", rawParam, "integer"))
+			}
+		}
+		rctx.Param = params
+	}
+	return &rctx, err
+}
+`
+
+	intArrayRequiredContextFactory = `
+func NewListBottleContext(ctx context.Context, r *http.Request, service *goa.Service) (*ListBottleContext, error) {
+	var err error
+	resp := goa.ContextResponse(ctx)
+	resp.Service = service
+	req := goa.ContextRequest(ctx)
+	req.Request = r
+	rctx := ListBottleContext{Context: ctx, ResponseData: resp, RequestData: req}
+	paramParam := req.Params["param"]
+	if len(paramParam) == 0 {
+		err = goa.MergeErrors(err, goa.MissingParamError("param"))
+	} else {
 		params := make([]int, len(paramParam))
 		for i, rawParam := range paramParam {
 			if param, err2 := strconv.Atoi(rawParam); err2 == nil {
@@ -1286,11 +2144,12 @@ type ListBottleContext struct {
 `
 
 	resContextFactory = `
-func NewListBottleContext(ctx context.Context, service *goa.Service) (*ListBottleContext, error) {
+func NewListBottleContext(ctx context.Context, r *http.Request, service *goa.Service) (*ListBottleContext, error) {
 	var err error
 	resp := goa.ContextResponse(ctx)
 	resp.Service = service
 	req := goa.ContextRequest(ctx)
+	req.Request = r
 	rctx := ListBottleContext{Context: ctx, ResponseData: resp, RequestData: req}
 	paramInt := req.Params["int"]
 	if len(paramInt) > 0 {
@@ -1317,11 +2176,12 @@ type ListBottleContext struct {
 `
 
 	requiredContextFactory = `
-func NewListBottleContext(ctx context.Context, service *goa.Service) (*ListBottleContext, error) {
+func NewListBottleContext(ctx context.Context, r *http.Request, service *goa.Service) (*ListBottleContext, error) {
 	var err error
 	resp := goa.ContextResponse(ctx)
 	resp.Service = service
 	req := goa.ContextRequest(ctx)
+	req.Request = r
 	rctx := ListBottleContext{Context: ctx, ResponseData: resp, RequestData: req}
 	paramInt := req.Params["int"]
 	if len(paramInt) == 0 {
@@ -1348,11 +2208,12 @@ type ListBottleContext struct {
 `
 
 	customContextFactory = `
-func NewListBottleContext(ctx context.Context, service *goa.Service) (*ListBottleContext, error) {
+func NewListBottleContext(ctx context.Context, r *http.Request, service *goa.Service) (*ListBottleContext, error) {
 	var err error
 	resp := goa.ContextResponse(ctx)
 	resp.Service = service
 	req := goa.ContextRequest(ctx)
+	req.Request = r
 	rctx := ListBottleContext{Context: ctx, ResponseData: resp, RequestData: req}
 	paramInt := req.Params["int"]
 	if len(paramInt) > 0 {
@@ -1379,11 +2240,12 @@ type ListBottleContext struct {
 `
 
 	payloadContextFactory = `
-func NewListBottleContext(ctx context.Context, service *goa.Service) (*ListBottleContext, error) {
+func NewListBottleContext(ctx context.Context, r *http.Request, service *goa.Service) (*ListBottleContext, error) {
 	var err error
 	resp := goa.ContextResponse(ctx)
 	resp.Service = service
 	req := goa.ContextRequest(ctx)
+	req.Request = r
 	rctx := ListBottleContext{Context: ctx, ResponseData: resp, RequestData: req}
 	return &rctx, err
 }
@@ -1430,7 +2292,7 @@ type PublicController interface {
 }
 `
 
-	fileServerOptionsHandler = `service.Mux.Handle("OPTIONS", "/public/*filepath", ctrl.MuxHandler("preflight", handlePublicOrigin(cors.HandlePreflight()), nil))`
+	fileServerOptionsHandler = `service.Mux.Handle("OPTIONS", "/public/star\\*star/*filepath", ctrl.MuxHandler("preflight", handlePublicOrigin(cors.HandlePreflight()), nil))`
 
 	simpleController = `// BottlesController is the controller interface for the Bottles actions.
 type BottlesController interface {
@@ -1536,13 +2398,13 @@ func MountBottlesController(service *goa.Service, ctrl BottlesController) {
 			return err
 		}
 		// Build the context
-		rctx, err := NewListBottleContext(ctx, service)
+		rctx, err := NewListBottleContext(ctx, req, service)
 		if err != nil {
 			return err
 		}
 		return ctrl.List(rctx)
 	}
-	service.Mux.Handle("GET", "/accounts/:accountID/bottles", ctrl.MuxHandler("List", h, nil))
+	service.Mux.Handle("GET", "/accounts/:accountID/bottles", ctrl.MuxHandler("list", h, nil))
 	service.LogInfo("mount", "ctrl", "Bottles", "action", "List", "route", "GET /accounts/:accountID/bottles")
 }
 `
@@ -1557,13 +2419,13 @@ func MountBottlesController(service *goa.Service, ctrl BottlesController) {
 			return err
 		}
 		// Build the context
-		rctx, err := NewListBottleContext(ctx, service)
+		rctx, err := NewListBottleContext(ctx, req, service)
 		if err != nil {
 			return err
 		}
 		return ctrl.List(rctx)
 	}
-	service.Mux.Handle("GET", "/accounts/:accountID/bottles", ctrl.MuxHandler("List", h, nil))
+	service.Mux.Handle("GET", "/accounts/:accountID/bottles", ctrl.MuxHandler("list", h, nil))
 	service.LogInfo("mount", "ctrl", "Bottles", "action", "List", "route", "GET /accounts/:accountID/bottles")
 }
 `
@@ -1586,13 +2448,13 @@ type BottlesController interface {
 			return err
 		}
 		// Build the context
-		rctx, err := NewListBottleContext(ctx, service)
+		rctx, err := NewListBottleContext(ctx, req, service)
 		if err != nil {
 			return err
 		}
 		return ctrl.List(rctx)
 	}
-	service.Mux.Handle("GET", "/accounts/:accountID/bottles", ctrl.MuxHandler("List", h, nil))
+	service.Mux.Handle("GET", "/accounts/:accountID/bottles", ctrl.MuxHandler("list", h, nil))
 	service.LogInfo("mount", "ctrl", "Bottles", "action", "List", "route", "GET /accounts/:accountID/bottles")
 
 	h = func(ctx context.Context, rw http.ResponseWriter, req *http.Request) error {
@@ -1601,13 +2463,13 @@ type BottlesController interface {
 			return err
 		}
 		// Build the context
-		rctx, err := NewShowBottleContext(ctx, service)
+		rctx, err := NewShowBottleContext(ctx, req, service)
 		if err != nil {
 			return err
 		}
 		return ctrl.Show(rctx)
 	}
-	service.Mux.Handle("GET", "/accounts/:accountID/bottles/:id", ctrl.MuxHandler("Show", h, nil))
+	service.Mux.Handle("GET", "/accounts/:accountID/bottles/:id", ctrl.MuxHandler("show", h, nil))
 	service.LogInfo("mount", "ctrl", "Bottles", "action", "Show", "route", "GET /accounts/:accountID/bottles/:id")
 }
 `
@@ -1619,6 +2481,63 @@ type BottlesController interface {
 `
 	noParamHref = `func BottleHref() string {
 	return "/bottles"
+}
+`
+
+	simpleUserType = `// simplePayload user type.
+type simplePayload struct {
+	Name *string ` + "`" + `form:"name,omitempty" json:"name,omitempty" xml:"name,omitempty"` + "`" + `
+}
+
+
+
+// Publicize creates SimplePayload from simplePayload
+func (ut *simplePayload) Publicize() *SimplePayload {
+	var pub SimplePayload
+		if ut.Name != nil {
+		pub.Name = ut.Name
+	}
+	return &pub
+}
+
+// SimplePayload user type.
+type SimplePayload struct {
+	Name *string ` + "`" + `form:"name,omitempty" json:"name,omitempty" xml:"name,omitempty"` + "`" + `
+}
+`
+
+	userTypeIncludingHash = `// complexPayload user type.
+type complexPayload struct {
+	Misc map[int]*miscPayload ` + "`" + `form:"misc,omitempty" json:"misc,omitempty" xml:"misc,omitempty"` + "`" + `
+	Name *string ` + "`" + `form:"name,omitempty" json:"name,omitempty" xml:"name,omitempty"` + "`" + `
+}
+
+
+
+// Publicize creates ComplexPayload from complexPayload
+func (ut *complexPayload) Publicize() *ComplexPayload {
+	var pub ComplexPayload
+		if ut.Misc != nil {
+		pub.Misc = make(map[int]*MiscPayload, len(ut.Misc))
+		for k2, v2 := range ut.Misc {
+						pubk2 := k2
+			var pubv2 *MiscPayload
+			if v2 != nil {
+						pubv2 = v2.Publicize()
+			}
+			pub.Misc[pubk2] = pubv2
+		}
+	}
+	if ut.Name != nil {
+		pub.Name = ut.Name
+	}
+	return &pub
+}
+
+// ComplexPayload user type.
+type ComplexPayload struct {
+	Misc map[int]*MiscPayload ` + "`" + `form:"misc,omitempty" json:"misc,omitempty" xml:"misc,omitempty"` + "`" + `
+	Name *string ` + "`" + `form:"name,omitempty" json:"name,omitempty" xml:"name,omitempty"` + "`" + `
 }
 `
 )

@@ -9,7 +9,6 @@ import (
 	"strconv"
 
 	"github.com/goadesign/goa/design"
-	"github.com/goadesign/goa/goagen/codegen"
 )
 
 type (
@@ -236,13 +235,14 @@ func GenerateResourceDefinition(api *design.APIDefinition, r *design.ResourceDef
 
 // MediaTypeRef produces the JSON reference to the media type definition with the given view.
 func MediaTypeRef(api *design.APIDefinition, mt *design.MediaTypeDefinition, view string) string {
-	if _, ok := Definitions[mt.TypeName]; !ok {
-		GenerateMediaTypeDefinition(api, mt, view)
+	projected, _, err := mt.Project(view)
+	if err != nil {
+		panic(fmt.Sprintf("failed to project media type %#v: %s", mt.Identifier, err)) // bug
 	}
-	ref := fmt.Sprintf("#/definitions/%s", mt.TypeName)
-	if view != "default" {
-		ref += codegen.Goify(view, true)
+	if _, ok := Definitions[projected.TypeName]; !ok {
+		GenerateMediaTypeDefinition(api, projected, "default")
 	}
+	ref := fmt.Sprintf("#/definitions/%s", projected.TypeName)
 	return ref
 }
 
@@ -282,7 +282,9 @@ func TypeSchema(api *design.APIDefinition, t design.DataType) *JSONSchema {
 	s := NewJSONSchema()
 	switch actual := t.(type) {
 	case design.Primitive:
-		s.Type = JSONType(actual.Name())
+		if name := actual.Name(); name != "any" {
+			s.Type = JSONType(actual.Name())
+		}
 		switch actual.Kind() {
 		case design.UUIDKind:
 			s.Format = "uuid"

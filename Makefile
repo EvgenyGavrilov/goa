@@ -24,7 +24,7 @@ DEPEND=\
 	github.com/onsi/ginkgo \
 	github.com/onsi/ginkgo/ginkgo \
 	github.com/onsi/gomega \
-	github.com/spf13/hugo \
+	github.com/pkg/errors \
 	golang.org/x/tools/cmd/cover \
 	golang.org/x/tools/cmd/goimports
 
@@ -33,9 +33,10 @@ DEPEND=\
 all: depend lint cyclo goagen test
 
 docs:
+	@go get -v github.com/spf13/hugo
 	@git clone https://github.com/goadesign/goa.design
 	@rm -rf goa.design/content/reference goa.design/public
-	@mdc github.com/goadesign/goa goa.design/content/reference --exclude goa.design
+	@mdc --exclude goa.design github.com/goadesign/goa goa.design/content/reference
 	@cd goa.design && hugo
 	@rm -rf public
 	@mv goa.design/public public
@@ -56,12 +57,12 @@ lint:
 	fi
 
 cyclo:
-	@if [ "`gocyclo -over 20 . | grep -v _integration_tests | tee /dev/stderr`" ]; then \
+	@if [ "`gocyclo -over 20 . | grep -v _integration_tests | grep -v _test.go | tee /dev/stderr`" ]; then \
 		echo "^ - Cyclomatic complexity exceeds 20, refactor the code!" && echo && exit 1; \
 	fi
 
 test:
-	@ginkgo -r --randomizeAllSpecs --failOnPending --randomizeSuites --race -skipPackage vendor
+	@ginkgo -r --randomizeAllSpecs --failOnPending --randomizeSuites -skipPackage vendor
 	go test ./_integration_tests
 
 goagen:

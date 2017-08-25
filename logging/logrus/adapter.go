@@ -16,10 +16,10 @@ package goalogrus
 import (
 	"fmt"
 
-	"golang.org/x/net/context"
+	"context"
 
-	"github.com/Sirupsen/logrus"
 	"github.com/goadesign/goa"
+	"github.com/sirupsen/logrus"
 )
 
 // adapter is the logrus goa logger adapter.

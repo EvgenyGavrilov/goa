@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -11,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"golang.org/x/net/context"
+	"context"
 )
 
 type (
@@ -50,6 +51,19 @@ type (
 		// MaxRequestBodyLength is the maximum length read from request bodies.
 		// Set to 0 to remove the limit altogether. Defaults to 1GB.
 		MaxRequestBodyLength int64
+		// FileSystem is used in FileHandler to open files. By default it returns
+		// http.Dir but you can override it with another one that implements http.FileSystem.
+		// For example using github.com/elazarl/go-bindata-assetfs is like below.
+		//
+		//	ctrl.FileSystem = func(dir string) http.FileSystem {
+		//		return &assetfs.AssetFS{
+		//			Asset: Asset,
+		//			AssetDir: AssetDir,
+		//			AssetInfo: AssetInfo,
+		//			Prefix: dir,
+		//		}
+		//	}
+		FileSystem func(string) http.FileSystem
 
 		middleware []Middleware // Controller specific middleware if any
 	}
@@ -117,7 +131,7 @@ func New(name string) *Service {
 }
 
 // CancelAll sends a cancel signals to all request handlers via the context.
-// See https://godoc.org/golang.org/x/net/context for details on how to handle the signal.
+// See https://golang.org/pkg/context/ for details on how to handle the signal.
 func (service *Service) CancelAll() {
 	service.cancel()
 }
@@ -156,6 +170,14 @@ func (service *Service) ListenAndServeTLS(addr, certFile, keyFile string) error 
 	return http.ListenAndServeTLS(addr, certFile, keyFile, service.Mux)
 }
 
+// Serve accepts incoming HTTP connections on the listener l, invoking the service mux handler for each.
+func (service *Service) Serve(l net.Listener) error {
+	if err := http.Serve(l, service.Mux); err != nil {
+		return err
+	}
+	return nil
+}
+
 // NewController returns a controller for the given resource. This method is mainly intended for
 // use by the generated code. User code shouldn't have to call it directly.
 func (service *Service) NewController(name string) *Controller {
@@ -164,6 +186,9 @@ func (service *Service) NewController(name string) *Controller {
 		Service:              service,
 		Context:              context.WithValue(service.Context, ctrlKey, name),
 		MaxRequestBodyLength: 1073741824, // 1 GB
+		FileSystem: func(dir string) http.FileSystem {
+			return http.Dir(dir)
+		},
 	}
 }
 
@@ -315,7 +340,7 @@ func (ctrl *Controller) FileHandler(path, filename string) Handler {
 		}
 		LogInfo(ctx, "serve file", "name", fname, "route", req.URL.Path)
 		dir, name := filepath.Split(fname)
-		fs := http.Dir(dir)
+		fs := ctrl.FileSystem(dir)
 		f, err := fs.Open(name)
 		if err != nil {
 			return ErrInvalidFile(err)
